@@ -2,7 +2,23 @@
 
 TDK App is a local browser dashboard for operating TDK projects. It shows project, stack, and resource health, recent logs, endpoints, and configured port conflicts. It can start, stop, or restart a project, stack, or resource and open its folder or a terminal.
 
-The app runs on your machine and uses the installed `tdk` CLI for status and lifecycle operations. It does not connect to a hosted control plane. Start, Stop, and Restart need a TDK CLI that provides the scoped `tdk start`, `tdk stop`, and `tdk restart` commands (TDK CLI 1.3.145 or newer). On load the app runs non-mutating probes (`tdk --version` and `tdk <command> --help`). If the CLI is older, missing, or not responding, lifecycle controls are disabled with an explanation, `POST /api/actions` returns HTTP 409 (`cli_unsupported`) without running anything, and status, endpoints, ports, logs, and folder/terminal actions keep working.
+The app runs on your machine and uses the installed `tdk` CLI for status and lifecycle operations. It does not connect to a hosted control plane. Start runs `tdk up` (optionally for one stack or resources). Stop runs `tdk down` and Restart runs `tdk down` then `tdk up`; both act on the whole project because `tdk down` has no scope. On load the app runs non-mutating probes (`tdk --version`, `tdk up --help`, `tdk down --help`). If the CLI is older, missing, or not responding, lifecycle controls are disabled with an explanation, `POST /api/actions` returns HTTP 409 (`cli_unsupported`) without running anything, and status, endpoints, ports, logs, and folder/terminal actions keep working.
+
+## Screenshots
+
+**Overview** (dark): health, readiness and running gauges, plus every project with Start, Stop and Restart.
+
+![Overview in dark mode](docs/screenshots/overview-dark.png)
+
+**Project** (dark): stacks and resources with inline actions, doctor score, and a more-actions menu.
+
+![Project in dark mode](docs/screenshots/project-dark.png)
+
+**Project** (light): the same view in light mode.
+
+![Project in light mode](docs/screenshots/project-light.png)
+
+Screenshots are produced by the app itself: `TDK_SNAPSHOT=out.png TDK_APPEARANCE=dark "dist/TDK App.app/Contents/MacOS/TDKApp"` renders the window to a PNG and exits (`TDK_SNAPSHOT_JS` runs a script first, for example to open a project). Account names are masked in the UI, so paths appear as `~/...`.
 
 ## Run from a checkout
 
@@ -21,6 +37,17 @@ TDK App automatically searches common development locations, including `/var/www
 `--port 0` (the default) selects an available local port.
 
 The server binds only to `127.0.0.1`, protects the browser session with a random in-memory token, and exits with the app process. Closing the dashboard does not stop project resources. The terminal dashboard `tdk ui` remains available independently.
+
+## macOS app
+
+A lightweight native app (about 200 KB, a WKWebView shell, no Electron) that runs the same server in its own window:
+
+```sh
+./macos/build.sh
+open "dist/TDK App.app"
+```
+
+Requires Xcode Command Line Tools to build and Node.js 22.12+ on your login-shell `PATH` to run. The app starts the server with `--no-open` and stops it when you quit.
 
 ## Install as a command
 

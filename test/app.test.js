@@ -22,14 +22,14 @@ function projectFixture(name) {
 }
 
 async function serverFor(options) {
-  const started = await startAppServer({ port: 0, token: "test-session-token", ...options });
+  const started = await startAppServer({ port: 0, token: "test-session-token", dockerCheck: async () => true, ...options });
   servers.push(started.server);
   return started;
 }
 
 const supported = { state: "supported", lifecycle: true, version: "1.3.145", minVersion: "1.3.145", installUrl: "https://example.test", message: null };
 
-function fakeCli({ version = "1.3.145", commands = ["start", "stop", "restart"], versionStatus = 0, versionStderr = "" } = {}) {
+function fakeCli({ version = "1.3.145", commands = ["up", "down"], versionStatus = 0, versionStderr = "" } = {}) {
   const calls = [];
   const execute = async (_project, args) => {
     calls.push(args);
@@ -49,12 +49,17 @@ describe("TDK CLI capability probe", () => {
     assert.equal(result.version, "1.3.145");
   });
 
+  it("accepts 1.3.144 because it has tdk up and tdk down", async () => {
+    const result = await probeCli(fakeCli({ version: "1.3.144" }).execute);
+    assert.equal(result.lifecycle, true);
+  });
+
   it("reports stable 1.3.140 as unsupported with an actionable message", async () => {
     const { execute } = fakeCli({ version: "1.3.140", commands: [] });
     const result = await probeCli(execute);
     assert.equal(result.state, "unsupported");
     assert.equal(result.lifecycle, false);
-    assert.match(result.message, /1\.3\.140.*Update to/);
+    assert.match(result.message, /1\.3\.140.*Update the CLI/);
   });
 
   it("reports a missing binary and a failing version check separately", async () => {
@@ -90,7 +95,7 @@ describe("TDK App local server", () => {
     assert.equal(response.status, 409);
     const body = await response.json();
     assert.equal(body.code, "cli_unsupported");
-    assert.match(body.error, /Update to/);
+    assert.match(body.error, /Update the CLI/);
     assert(!calls.some((args) => args.includes("--json")));
   });
 
@@ -120,6 +125,18 @@ describe("TDK App local server", () => {
     const projects = discoverProjects({ currentRoot: null, scanRoots: [root] });
     assert.deepEqual(projects.map((entry) => entry.root), [project]);
     assert(commonProjectScanRoots("/Users/example").includes("/var/www"));
+  });
+
+  it("reaches shallow projects before a large sibling tree exhausts the directory cap", () => {
+    const root = mkdtempSync(join(tmpdir(), "tdk-app-scan-"));
+    tempDirs.push(root);
+    const project = join(root, "a-project");
+    mkdirSync(join(project, ".tdk"), { recursive: true });
+    writeFileSync(join(project, ".tdk", "project.json"), JSON.stringify({ project: { name: "shallow" } }));
+    for (let index = 0; index < 20; index += 1) mkdirSync(join(root, "z-large", `dir-${index}`), { recursive: true });
+
+    const projects = discoverProjects({ currentRoot: null, scanRoots: [root], maxDirectoriesPerRoot: 10 });
+    assert.deepEqual(projects.map((entry) => entry.root), [project]);
   });
 
   it("returns project status and port conflicts from CLI JSON", async () => {
@@ -164,9 +181,24 @@ describe("TDK App local server", () => {
     const response = await fetch(`${origin}/api/actions`, {
       method: "POST",
       headers: { "content-type": "application/json", origin, "x-tdk-token": started.token },
-      body: JSON.stringify({ project: "a", operation: "restart", resources: ["api"] }),
+      body: JSON.stringify({ project: "a", operation: "start", stack: "shop", resources: ["api"] }),
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(calls, [["restart", "--json", "--only", "api"]]);
+    assert.deepEqual(calls, [["up", "--json", "shop", "--only", "api"]]);
+  });
+
+  it("maps whole-project stop and restart to tdk down / tdk up and refuses scoped ones", async () => {
+    const calls = [];
+    const runCommand = async (_project, args) => { calls.push(args); return { status: 0, stderr: "", stdout: JSON.stringify({ data: {} }) }; };
+    const started = await serverFor({ projects: [{ id: "a", name: "a", root: "/projects/a" }], runCommand, probe: async () => supported });
+    const origin = new URL(started.url).origin;
+    const send = (body) => fetch(`${origin}/api/actions`, { method: "POST", headers: { "content-type": "application/json", origin, "x-tdk-token": started.token }, body: JSON.stringify(body) });
+    assert.equal((await send({ project: "a", operation: "stop" })).status, 200);
+    assert.deepEqual(calls.splice(0), [["down", "--json", "--force"]]);
+    assert.equal((await send({ project: "a", operation: "restart" })).status, 200);
+    assert.deepEqual(calls.splice(0), [["down", "--json", "--force"], ["up", "--json"]]);
+    assert.equal((await send({ project: "a", operation: "stop", stack: "shop" })).status, 400);
+    assert.equal((await send({ project: "a", operation: "restart", resources: ["api"] })).status, 400);
+    assert.equal(calls.length, 0);
   });
 });

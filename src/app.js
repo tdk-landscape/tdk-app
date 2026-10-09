@@ -1,8 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statfsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 
 const PROJECT_FILE = join(".tdk", "project.json");
@@ -94,7 +94,7 @@ export function discoverProjects({
     const queue = [{ path: scanRoot, depth: 0 }];
     let visited = 0;
     while (queue.length && visited < maxDirectoriesPerRoot && discovered.size < maxProjects) {
-      const current = queue.pop();
+      const current = queue.shift();
       visited += 1;
       if (existsSync(join(current.path, PROJECT_FILE))) {
         discovered.add(current.path);
@@ -126,38 +126,105 @@ function sameSecret(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Never show the account name: the home path becomes ~ and any other /Users/<name> becomes /Users/****.
+export function maskPaths(text) {
+  const home = homedir();
+  return text.split(home).join("~").replace(/\/Users\/(?!\*{4})[^/\\"\s]+/g, "/Users/****");
+}
+
 function sendJson(response, status, data) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   });
-  response.end(JSON.stringify(data));
+  response.end(maskPaths(JSON.stringify(data)));
+}
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
 }
 
 async function readBody(request) {
   let body = "";
   for await (const chunk of request) {
     body += chunk.toString();
-    if (body.length > MAX_BODY) throw new Error("Request body is too large.");
+    if (body.length > MAX_BODY) {
+      request.destroy();
+      throw new HttpError(413, "Request body is too large.");
+    }
   }
   if (!body) return {};
-  const value = JSON.parse(body);
+  let value;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new HttpError(400, "Request body is not valid JSON.");
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a JSON object.");
+    throw new HttpError(400, "Expected a JSON object.");
   }
   return value;
 }
+
+export const RESOURCE_TYPES = ["backend", "frontend", "worker", "mcp", "bring-your-own", "sdk"];
+export const PROJECT_TEMPLATES = ["restaurant", "saas", "erp", "user-management", "ecommerce", "example"];
+const NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
+const ID_RE = /^[a-z][a-z0-9-]{0,30}$/;
+
+function actionResult(result) {
+  return { ok: result.status === 0, timedOut: result.status == null, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-4000) };
+}
+
+// New projects may only be created inside the user's home folder or the temp dir.
+function allowedParent(parent) {
+  if (typeof parent !== "string" || parent.includes("\0")) return null;
+  if (parent === "~" || parent.startsWith("~/")) parent = join(homedir(), parent.slice(1));
+  if (!isAbsolute(parent)) return null;
+  try {
+    const real = realpathSync(parent);
+    if (!statSync(real).isDirectory()) return null;
+    const roots = [homedir(), tmpdir()].map((root) => { try { return realpathSync(root); } catch { return root; } });
+    return roots.some((root) => real === root || real.startsWith(root + sep)) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+// Space cleanup candidates. Only regenerable caches and unused Docker data: never Downloads, Trash or project files.
+export function cleanupCandidates(home = homedir()) {
+  const emptyDir = (path) => ({ binary: "find", args: [path, "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"] });
+  return [
+    { id: "app-caches", label: "Application caches", note: "~/Library/Caches. Apps rebuild these as needed.", path: join(home, "Library", "Caches"), run: emptyDir(join(home, "Library", "Caches")) },
+    { id: "logs", label: "Log files", note: "~/Library/Logs", path: join(home, "Library", "Logs"), run: emptyDir(join(home, "Library", "Logs")) },
+    { id: "npm", label: "npm cache", note: "Re-downloaded on the next install.", path: join(home, ".npm"), run: { binary: "npm", args: ["cache", "clean", "--force"] } },
+    { id: "bun", label: "Bun cache", note: "Re-downloaded on the next install.", path: join(home, ".bun", "install", "cache"), run: { binary: "bun", args: ["pm", "cache", "rm"] } },
+    { id: "pnpm", label: "pnpm store (unreferenced packages)", note: "pnpm store prune", path: join(home, "Library", "pnpm"), run: { binary: "pnpm", args: ["store", "prune"] } },
+    { id: "dot-cache", label: "~/.cache", note: "Tool caches such as pip and Hugging Face.", path: join(home, ".cache"), run: emptyDir(join(home, ".cache")) },
+    { id: "brew", label: "Homebrew downloads", note: "brew cleanup -s", path: join(home, "Library", "Caches", "Homebrew"), run: { binary: "brew", args: ["cleanup", "-s"] } },
+    { id: "docker", label: "Unused Docker images and build cache", note: "docker system prune -af (keeps volumes). Needs Docker to be running.", path: null, requiresDocker: true, run: { binary: "docker", args: ["system", "prune", "-af"] } },
+  ];
+}
+
+// CLI-supplied names are passed as argv; a leading "-" would be parsed as a flag.
+const isArgName = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && !value.startsWith("-") && !value.includes("\0");
 
 function readMachine(result) {
   let envelope;
   try {
     envelope = JSON.parse(result.stdout);
   } catch {
-    throw new Error(result.stderr.trim() || `TDK returned invalid JSON (exit ${result.status ?? 1}).`);
+    envelope = null;
   }
-  if ((result.status !== 0 || envelope.errors?.length) && envelope.data == null) {
-    throw new Error(envelope.errors?.map((error) => error.message).filter(Boolean).join("\n") || result.stderr.trim() || "TDK command failed.");
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    throw new Error(String(result.stderr ?? "").trim() || (result.status == null ? "TDK did not respond (timed out or could not start)." : `TDK returned invalid JSON (exit ${result.status}).`));
+  }
+  const errors = Array.isArray(envelope.errors) ? envelope.errors : [];
+  if ((result.status !== 0 || errors.length) && envelope.data == null) {
+    throw new Error(errors.map((error) => error?.message).filter((message) => typeof message === "string" && message).join("\n") || String(result.stderr ?? "").trim() || "TDK command failed.");
   }
   if (envelope.data == null) throw new Error("TDK returned no data.");
   return envelope.data;
@@ -186,21 +253,26 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
       clearTimeout(timer);
       resolvePromise({ status, stdout, stderr });
     };
-    const timer = setTimeout(() => {
+    const stop = () => {
       child.kill("SIGTERM");
+      // A CLI that ignores SIGTERM must not outlive the request.
+      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+    };
+    const timer = setTimeout(() => {
+      stop();
       finish(null);
     }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
       if (stdout.length > 2_000_000) {
-        child.kill("SIGTERM");
+        stop();
         finish(null);
       }
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
       if (stderr.length > 2_000_000) {
-        child.kill("SIGTERM");
+        stop();
         finish(null);
       }
     });
@@ -212,9 +284,11 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
   });
 }
 
-export const MIN_CLI_VERSION = "1.3.145";
+export const MANUAL_UPDATE_COMMAND = "curl -fsSL https://tdk-landscape.github.io/install.sh | sh";
+export const MIN_CLI_VERSION = null;
 const INSTALL_URL = "https://github.com/tdk-landscape/tdk-cli-core#install";
-const LIFECYCLE_COMMANDS = ["start", "stop", "restart"];
+// The CLI starts and stops through `up` and `down` (no scoped start/stop/restart exist).
+const LIFECYCLE_COMMANDS = ["up", "down"];
 
 // Non-mutating probe: `tdk --version` for display and `tdk <cmd> --help` per lifecycle command.
 // Commander prints command-specific help ("Usage: tdk <cmd>") only when the command exists;
@@ -230,7 +304,7 @@ export async function probeCli(execute, cwd = process.cwd()) {
       state: missing ? "missing" : "failed",
       lifecycle: false,
       message: missing
-        ? `The tdk CLI was not found. Install TDK CLI ${MIN_CLI_VERSION} or newer, or set TDK_BIN to its path.`
+        ? `The tdk CLI was not found. Install the TDK CLI, or set TDK_BIN to its path.`
         : `The tdk CLI did not respond to a version check (${versionResult.stderr.trim() || "timeout or non-zero exit"}). Check TDK_BIN and your install.`,
     };
   }
@@ -243,7 +317,7 @@ export async function probeCli(execute, cwd = process.cwd()) {
         version,
         state: "unsupported",
         lifecycle: false,
-        message: `TDK CLI ${version ?? "(unknown version)"} does not support \`tdk ${LIFECYCLE_COMMANDS.join("/")}\`. Update to ${MIN_CLI_VERSION} or newer to enable Start, Stop and Restart; status, logs and endpoints still work.`,
+        message: `TDK CLI ${version ?? "(unknown version)"} does not support \`tdk ${LIFECYCLE_COMMANDS.join("/")}\`. Update the CLI to enable Start, Stop and Restart; status, logs and endpoints still work.`,
       };
     }
   }
@@ -256,17 +330,90 @@ async function projectStatus(project, execute) {
   try {
     services = readMachine(await execute(project, ["networks", "--json"])).services ?? [];
   } catch {}
-  const urls = new Map(services.map((service) => [service.name, service.url]));
+  if (!status || typeof status !== "object" || Array.isArray(status)) throw new Error("TDK returned an unexpected status format.");
+  const objects = (value) => (Array.isArray(value) ? value.filter((item) => item && typeof item === "object" && !Array.isArray(item)) : []);
+  const urls = new Map(objects(services).map((service) => [service.name, service.url]));
   return {
     project,
-    resources: (status.resources ?? []).map((resource) => ({
+    resources: objects(status.resources).map((resource) => ({
       ...resource,
       url: safeUrl(urls.get(resource.name) ?? resource.url),
     })),
-    stacks: status.stacks ?? [],
-    ports: status.ports ?? [],
-    tiltRunning: Boolean(status.tilt?.resources),
+    stacks: objects(status.stacks),
+    ports: objects(status.ports),
+    tiltRunning: Boolean(status.tilt && typeof status.tilt === "object" && status.tilt.resources),
   };
+}
+
+// Turns `tdk doctor --json` data into a 0-100 score: pass = 1, warning = 0.5, fail = 0, skipped ignored.
+export function summarizeDoctor(data) {
+  const raw = data && typeof data === "object" && Array.isArray(data.checks) ? data.checks : [];
+  const checks = raw.filter((check) => check && typeof check === "object").map((check) => ({
+    name: typeof check.name === "string" ? check.name : "Unnamed check",
+    status: check.isSkipped ? "skipped" : check.didPass ? "pass" : check.isWarning ? "warning" : "fail",
+    message: typeof check.message === "string" ? check.message : "",
+    fix: typeof check.fix === "string" ? check.fix : "",
+  }));
+  const counted = checks.filter((check) => check.status !== "skipped");
+  const points = counted.reduce((sum, check) => sum + (check.status === "pass" ? 1 : check.status === "warning" ? 0.5 : 0), 0);
+  return {
+    score: counted.length ? Math.round((points / counted.length) * 100) : null,
+    passed: counted.filter((check) => check.status === "pass").length,
+    warnings: counted.filter((check) => check.status === "warning").length,
+    failed: counted.filter((check) => check.status === "fail").length,
+    total: counted.length,
+    ready: Boolean(data?.ready),
+    checks,
+  };
+}
+
+export const DOCKER_UNAVAILABLE = "Docker isn't responding. Open Docker Desktop (or quit and reopen it if it is stuck), wait until it says it is running, then try again.";
+
+// A nearly full disk is the most common reason Docker Desktop's engine stops answering.
+export function lowDiskNote(path = homedir(), thresholdGb = 5) {
+  try {
+    const stats = statfsSync(path);
+    const freeGb = (stats.bavail * stats.bsize) / 1024 ** 3;
+    return freeGb < thresholdGb ? ` Your disk has only ${freeGb.toFixed(1)} GB free, which is the most likely cause. Free some space first (for example with \`docker system prune\` once Docker responds, or by deleting large files).` : "";
+  } catch {
+    return "";
+  }
+}
+
+function freeGb(path = homedir()) {
+  try {
+    const stats = statfsSync(path);
+    return (stats.bavail * stats.bsize) / 1024 ** 3;
+  } catch {
+    return Infinity;
+  }
+}
+
+// Quits Docker Desktop (force-quitting if it is stuck), reopens it and waits until the engine answers.
+export async function restartDockerDesktop({ check = checkDocker, run = (command, args) => runTdk({ root: homedir() }, args, { binary: command, timeoutMs: 20_000 }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitMs = 240_000, platform = process.platform, free = freeGb } = {}) {
+  if (platform !== "darwin") return { ok: false, message: "Restarting Docker automatically is only supported on macOS. Restart Docker manually." };
+  const gb = free();
+  if (gb < 2) return { ok: false, lowDisk: true, message: `Only ${gb.toFixed(1)} GB of disk is free, so Docker cannot start. Free at least 5 GB, then try again.` };
+  await run("osascript", ["-e", 'tell application "Docker" to quit']);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const running = await run("pgrep", ["-f", "Docker Desktop"]);
+    if (running.status !== 0) break;
+    if (attempt === 4) await run("pkill", ["-9", "-f", "/Applications/Docker.app"]);
+    await sleep(2500);
+  }
+  const opened = await run("open", ["-a", "Docker"]);
+  if (opened.status !== 0) return { ok: false, message: "Could not open Docker Desktop. Is it installed in /Applications?" };
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await sleep(4000);
+    if (await check().catch(() => false)) return { ok: true, message: "Docker is running again." };
+  }
+  return { ok: false, message: "Docker Desktop was reopened but is still not responding. Check its window for errors." };
+}
+
+export async function checkDocker(execute = runTdk) {
+  const result = await execute({ root: homedir() }, ["info", "--format", "{{.ServerVersion}}"], { binary: process.env.DOCKER_BIN || "docker", timeoutMs: 8000 });
+  return result.status === 0;
 }
 
 function safeUrl(value) {
@@ -291,9 +438,60 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
+export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop, prewarm = false }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
+  let updating = false;
+  let restartingDocker = false;
+  // Stale-while-revalidate status cache: answers instantly after the first load, refreshes in the background.
+  const statusCache = new Map();
+  const STATUS_FRESH_MS = 4000;
+  const refreshStatus = (project) => {
+    const entry = statusCache.get(project.id) ?? {};
+    if (entry.pending) return entry.pending;
+    entry.pending = projectStatus(project, runCommand).catch((error) => ({
+      project, resources: [], stacks: [], ports: [], tiltRunning: false,
+      error: error instanceof Error ? error.message : String(error),
+    })).then((snapshot) => {
+      entry.snapshot = snapshot;
+      entry.at = Date.now();
+      entry.pending = null;
+      return snapshot;
+    });
+    statusCache.set(project.id, entry);
+    return entry.pending;
+  };
+  const getStatus = (project) => {
+    const entry = statusCache.get(project.id);
+    if (!entry?.snapshot) return refreshStatus(project);
+    if (Date.now() - entry.at > STATUS_FRESH_MS) void refreshStatus(project);
+    return entry.snapshot;
+  };
+  const invalidateStatus = (project) => {
+    const entry = statusCache.get(project.id);
+    if (entry) entry.at = 0;
+  };
+  if (prewarm) void Promise.resolve(projectsReady).then(() => { for (const project of projects) void refreshStatus(project); });
+  const doctorCache = new Map();
+  const DOCTOR_TTL_MS = 120_000;
+  const loadDoctor = (project, force) => {
+    const cached = doctorCache.get(project.id);
+    if (cached && !force && (cached.pending || Date.now() - cached.at < DOCTOR_TTL_MS)) return cached.promise;
+    const entry = { at: Date.now(), pending: true };
+    entry.promise = (async () => {
+      try {
+        const data = readMachine(await runCommand(project, ["doctor", "--json", "--no-ping"], { timeoutMs: 45_000 }));
+        return { ...summarizeDoctor(data), at: new Date().toISOString() };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() };
+      } finally {
+        entry.pending = false;
+        entry.at = Date.now();
+      }
+    })();
+    doctorCache.set(project.id, entry);
+    return entry.promise;
+  };
   // Cache only a positive result so installing or updating the CLI is picked up on the next load.
   const cliCapability = async () => {
     if (capability?.lifecycle) return capability;
@@ -338,8 +536,37 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
       if (url.pathname === "/api/cli" && request.method === "GET") {
         return sendJson(response, 200, await cliCapability());
       }
+      if (url.pathname === "/api/cli/update" && request.method === "POST") {
+        // Runs the CLI's own `tdk upgrade`; never elevates privileges. On failure the client shows the manual command.
+        if (updating) return sendJson(response, 409, { error: "An update is already running." });
+        updating = true;
+        try {
+          const result = await runCommand({ root: homedir() }, ["upgrade", "--yes"], { timeoutMs: 300_000 });
+          capability = null;
+          const cli = await cliCapability();
+          return sendJson(response, 200, { ok: result.status === 0, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-2000), cli });
+        } finally {
+          updating = false;
+        }
+      }
+      if (url.pathname === "/api/docker/restart" && request.method === "POST") {
+        if (restartingDocker) return sendJson(response, 409, { error: "Docker is already being restarted." });
+        restartingDocker = true;
+        try {
+          return sendJson(response, 200, await dockerRestart());
+        } finally {
+          restartingDocker = false;
+        }
+      }
+      if (url.pathname === "/api/doctor" && request.method === "GET") {
+        const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
+        if (!project) return sendJson(response, 400, { error: "Select a project." });
+        return sendJson(response, 200, await loadDoctor(project, url.searchParams.get("refresh") === "1"));
+      }
       if (url.pathname === "/api/projects" && request.method === "GET") {
-        const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand)));
+        await projectsReady;
+        // One broken project must not take the whole dashboard down.
+        const snapshots = await Promise.all(projects.map((project) => getStatus(project)));
         const conflicts = findConflicts(snapshots);
         return sendJson(response, 200, {
           projects: snapshots.map((snapshot) => ({
@@ -347,6 +574,7 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
             name: snapshot.project.name,
             path: snapshot.project.root,
             tiltRunning: snapshot.tiltRunning,
+            ...(snapshot.error ? { error: snapshot.error } : {}),
             resources: snapshot.resources,
             stacks: snapshot.stacks,
             ports: snapshot.ports.map((port) => ({ name: port.name, port: port.hostPort })),
@@ -360,38 +588,144 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
       if (url.pathname === "/api/logs" && request.method === "GET") {
         const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
         const resource = url.searchParams.get("resource");
-        if (!project || !resource) return sendJson(response, 400, { error: "Select a project and resource." });
+        if (!project || !isArgName(resource)) return sendJson(response, 400, { error: "Select a project and resource." });
         const result = readMachine(await runCommand(project, ["logs", "--json", "--tail", "100", "--service", resource]));
-        return sendJson(response, 200, { lines: result.lines ?? [] });
+        return sendJson(response, 200, { lines: Array.isArray(result.lines) ? result.lines : [] });
       }
       if (url.pathname === "/api/actions" && request.method === "POST") {
         const body = await readBody(request);
-        const project = projects.find((entry) => entry.id === body.project);
-        if (!project || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        if (!project || typeof body.project !== "string" || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
         const cli = await cliCapability();
         if (!cli.lifecycle) {
           return sendJson(response, 409, { error: cli.message, code: "cli_unsupported", cli: { state: cli.state, version: cli.version, minVersion: cli.minVersion, installUrl: cli.installUrl } });
         }
-        const args = [body.operation, "--json"];
-        if (typeof body.stack === "string" && body.stack) args.push(body.stack);
-        if (Array.isArray(body.resources)) {
-          const names = body.resources.filter((name) => typeof name === "string" && name.length > 0);
-          if (names.length !== body.resources.length || names.length > 30) return sendJson(response, 400, { error: "Invalid resource selection." });
-          if (names.length) args.push("--only", ...names);
+        const hasStack = body.stack != null && body.stack !== "";
+        if (hasStack && !isArgName(body.stack)) return sendJson(response, 400, { error: "Invalid stack name." });
+        if (body.resources != null && (!Array.isArray(body.resources) || body.resources.length > 30 || !body.resources.every((name) => isArgName(name)))) return sendJson(response, 400, { error: "Invalid resource selection." });
+        const scoped = hasStack || Boolean(body.resources?.length);
+        // `tdk down` has no scope, so stop and restart act on the whole project.
+        if (scoped && body.operation !== "start") return sendJson(response, 400, { error: "TDK can only stop or restart a whole project. Start accepts a stack or resources." });
+        const dockerOk = await Promise.resolve(dockerCheck()).catch(() => false);
+        if (!dockerOk) return sendJson(response, 503, { error: `${DOCKER_UNAVAILABLE}${lowDiskNote()}`, code: "docker_unavailable", lowDisk: lowDiskNote() !== "" });
+        const up = ["up", "--json"];
+        if (hasStack) up.push(body.stack);
+        if (body.resources?.length) up.push("--only", ...body.resources);
+        if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
+        let result;
+        try {
+          result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
+        } finally {
+          invalidateStatus(project);
         }
-        const result = readMachine(await runCommand(project, args, { timeoutMs: 180_000 }));
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
+      }
+      if (url.pathname === "/api/disk" && request.method === "GET") {
+        const gb = freeGb();
+        const dockerUp = await Promise.resolve(dockerCheck()).catch(() => false);
+        const items = await Promise.all(cleanupCandidates().map(async (item) => {
+          let sizeMb = null;
+          if (item.path && existsSync(item.path)) {
+            const sized = await runCommand({ root: homedir() }, ["-sk", item.path], { binary: "du", timeoutMs: 30_000 });
+            const kb = Number.parseInt(String(sized.stdout ?? "").split(/\s/)[0], 10);
+            if (sized.status === 0 && Number.isFinite(kb)) sizeMb = Math.round(kb / 1024);
+          }
+          return { id: item.id, label: item.label, note: item.note, sizeMb, available: item.requiresDocker ? dockerUp : item.path ? existsSync(item.path) : true, requiresDocker: Boolean(item.requiresDocker) };
+        }));
+        return sendJson(response, 200, { freeGb: Number.isFinite(gb) ? Number(gb.toFixed(1)) : null, dockerResponding: dockerUp, items });
+      }
+      if (url.pathname === "/api/disk/clean" && request.method === "POST") {
+        const body = await readBody(request);
+        const known = new Map(cleanupCandidates().map((item) => [item.id, item]));
+        if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > known.size || !body.ids.every((id) => typeof id === "string" && known.has(id))) return sendJson(response, 400, { error: "Choose what to clean." });
+        const before = freeGb();
+        const results = [];
+        for (const id of [...new Set(body.ids)]) {
+          const item = known.get(id);
+          const result = await runCommand({ root: homedir() }, item.run.args, { binary: item.run.binary, timeoutMs: 600_000 });
+          results.push({ id, label: item.label, ok: result.status === 0, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-300) });
+        }
+        const after = freeGb();
+        return sendJson(response, 200, { results, freedGb: Number.isFinite(before) && Number.isFinite(after) ? Number(Math.max(0, after - before).toFixed(1)) : null, freeGb: Number.isFinite(after) ? Number(after.toFixed(1)) : null });
+      }
+      if (url.pathname === "/api/meta" && request.method === "GET") {
+        const home = homedir();
+        const roots = commonProjectScanRoots().filter((root) => existsSync(root));
+        const tilde = (path) => (path === home ? "~" : path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path);
+        return sendJson(response, 200, { defaultParent: tilde(roots.find((root) => root.startsWith(home)) ?? home), roots: roots.map(tilde), templates: PROJECT_TEMPLATES, resourceTypes: RESOURCE_TYPES });
+      }
+      if (url.pathname === "/api/resources" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const type = body.type ?? "backend";
+        if (!project || !NAME_RE.test(body.name ?? "") || !RESOURCE_TYPES.includes(type)) return sendJson(response, 400, { error: "Choose a project, a kebab-case resource name and a valid type." });
+        const args = ["resource", body.name, "--type", type, "--yes"];
+        for (const [flag, value, test] of [["--stack", body.stack, NAME_RE], ["--framework", body.framework, ID_RE], ["--language", body.language, ID_RE]]) {
+          if (value == null || value === "") continue;
+          if (typeof value !== "string" || !test.test(value)) return sendJson(response, 400, { error: `Invalid ${flag.slice(2)}.` });
+          args.push(flag, value);
+        }
+        if (body.port != null && body.port !== "") {
+          if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) return sendJson(response, 400, { error: "Invalid port." });
+          args.push("--port", String(body.port));
+        }
+        const result = actionResult(await runCommand(project, args, { timeoutMs: 300_000 }));
+        doctorCache.delete(project.id);
+        invalidateStatus(project);
+        return sendJson(response, 200, result);
+      }
+      if (url.pathname === "/api/stacks" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const names = body.resources;
+        if (!project || !NAME_RE.test(body.name ?? "") || !Array.isArray(names) || !names.length || names.length > 30 || !names.every((name) => typeof name === "string" && NAME_RE.test(name))) {
+          return sendJson(response, 400, { error: "Choose a project, a kebab-case stack name and at least one resource." });
+        }
+        const result = actionResult(await runCommand(project, ["stack", body.name, "--resources", ...names, "--yes"], { timeoutMs: 120_000 }));
+        invalidateStatus(project);
+        return sendJson(response, 200, result);
+      }
+      if (url.pathname === "/api/config" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const commands = { regenerate: ["config", "regenerate"], verify: ["project", "--check"] };
+        if (!project || typeof body.operation !== "string" || !Object.hasOwn(commands, body.operation)) return sendJson(response, 400, { error: "Choose a project and regenerate or verify." });
+        return sendJson(response, 200, actionResult(await runCommand(project, commands[body.operation], { timeoutMs: 120_000 })));
+      }
+      if (url.pathname === "/api/projects/create" && request.method === "POST") {
+        const body = await readBody(request);
+        const parent = allowedParent(body.parent);
+        const template = body.template == null || body.template === "" ? null : body.template;
+        if (!parent) return sendJson(response, 400, { error: "Choose an existing folder inside your home directory." });
+        if (!NAME_RE.test(body.name ?? "")) return sendJson(response, 400, { error: "Project name must be kebab-case, for example my-shop." });
+        if (template && !PROJECT_TEMPLATES.includes(template)) return sendJson(response, 400, { error: "Unknown template." });
+        const target = join(parent, body.name);
+        if (existsSync(target)) return sendJson(response, 409, { error: `${target} already exists.` });
+        let result;
+        if (template) {
+          result = actionResult(await runCommand({ root: parent }, ["project", template, "--path", target, "--yes"], { timeoutMs: 300_000 }));
+        } else {
+          mkdirSync(target);
+          result = actionResult(await runCommand({ root: target }, ["project", "--yes"], { timeoutMs: 120_000 }));
+          if (!result.ok) { try { rmdirSync(target); } catch {} }
+        }
+        if (result.ok && existsSync(join(target, PROJECT_FILE))) {
+          const [created] = resolveProjects(null, [target]);
+          if (!projects.some((entry) => entry.root === created.root)) projects.push(created);
+          return sendJson(response, 200, { ...result, project: { id: created.id, name: created.name, path: created.root } });
+        }
+        return sendJson(response, 200, { ...result, ok: false, output: result.output || "TDK did not create a project here." });
       }
       if (url.pathname === "/api/open" && request.method === "POST") {
         const body = await readBody(request);
-        const project = projects.find((entry) => entry.id === body.project);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
         if (!project || !["project", "terminal"].includes(body.kind)) return sendJson(response, 400, { error: "Choose a valid project and open action." });
         await openPath(project.root, body.kind);
         return sendJson(response, 200, { ok: true });
       }
       return sendJson(response, 404, { error: "Not found." });
     })().catch((error) => {
-      if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      if (!response.headersSent) sendJson(response, error instanceof HttpError ? error.status : 500, { error: error instanceof Error ? error.message : String(error) });
       else response.destroy(error instanceof Error ? error : undefined);
     });
   });
