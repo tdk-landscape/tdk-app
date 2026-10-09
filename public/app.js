@@ -82,6 +82,18 @@ function renderSidebar() {
     </button>`).join("");
 }
 
+function overviewGauges(ready, resources) {
+  const scores = projects.map((project) => doctors.get(project.id)?.score).filter((score) => typeof score === "number");
+  const average = scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : null;
+  const running = projects.filter((project) => project.tiltRunning).length;
+  const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : null);
+  return [
+    gaugeCard({ value: average, text: average == null ? "…" : String(average), title: "Average health", caption: scores.length ? `${scores.length} of ${projects.length} projects checked` : "Running tdk doctor…", cls: average == null ? "none" : undefined }),
+    gaugeCard({ value: pct(ready, resources), text: `${ready}`, title: "Resources ready", caption: `${ready} of ${resources} resources`, cls: resources ? (ready === resources ? "good" : ready ? "warn" : "none") : "none" }),
+    gaugeCard({ value: pct(running, projects.length), text: `${running}`, title: "Projects running", caption: `${running} of ${projects.length} projects`, cls: running ? "good" : "none" }),
+  ].join("");
+}
+
 function renderOverview() {
   const visible = filteredProjects();
   const resources = projects.reduce((sum, project) => sum + (project.resources || []).length, 0);
@@ -102,7 +114,8 @@ function renderOverview() {
 
   content.innerHTML = `<div class="content-inner">
     <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p></div>
-      <div class="summary"><div class="stat"><strong>${projects.length}</strong><span>Projects</span></div><div class="stat"><strong>${ready}</strong><span>Ready resources</span></div><div class="stat"><strong>${resources}</strong><span>Total resources</span></div></div></div>
+      </div>
+    <div class="gauges">${overviewGauges(ready, resources)}</div>
     <div id="notice" class="notice" role="status"></div>
     ${visible.length ? `<div class="list-head"><span>Workspace</span><span>${visible.length} shown</span></div><section class="project-table" aria-label="TDK projects">${rows}</section>` : `<div class="empty"><span class="empty-icon">⌕</span><strong>${projects.length ? "No matching projects" : "No TDK projects found"}</strong><p>${projects.length ? "Try another project name or folder path." : "TDK App searches common development folders. Add a location with --scan-root or initialize a project with tdk project."}</p></div>`}
   </div>`;
@@ -180,11 +193,32 @@ function scoreClass(score) {
   return score >= 90 ? "good" : score >= 60 ? "warn" : "bad";
 }
 
-function scoreMarkup(project) {
+// Circular gauge; value is 0-100 or null. Colour follows the same thresholds everywhere.
+function ringMarkup({ value, text, label = "", size = 44, stroke = 5, cls = scoreClass(value), title = "" }) {
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const filled = value == null ? 0 : Math.max(0, Math.min(100, value)) / 100 * circumference;
+  const fontSize = Math.round(size * (size >= 80 ? 0.26 : 0.34));
+  return `<span class="ring ${cls}" style="width:${size}px;height:${size}px" ${title ? `title="${esc(title)}"` : ""} role="img" aria-label="${esc(label || text)}">
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><circle class="ring-track" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}"/><circle class="ring-fill" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>
+    <b style="font-size:${fontSize}px">${esc(text)}</b></span>`;
+}
+
+function scoreMarkup(project, size = 44) {
   const result = doctors.get(project.id);
-  if (!result) return `<span class="score none" title="Running tdk doctor…">…</span>`;
-  if (result.error) return `<span class="score none" title="${esc(`Doctor failed: ${result.error}`)}">—</span>`;
-  return `<span class="score ${scoreClass(result.score)}" title="${esc(`${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed`)}">${result.score ?? "—"}<small>/100</small></span>`;
+  if (!result) return ringMarkup({ value: null, text: "…", size, cls: "none", title: "Running tdk doctor…" });
+  if (result.error) return ringMarkup({ value: null, text: "—", size, cls: "none", title: `Doctor failed: ${result.error}` });
+  return ringMarkup({ value: result.score, text: result.score == null ? "—" : String(result.score), size, title: `Health ${result.score ?? "—"}/100 · ${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed`, label: `Health ${result.score}` });
+}
+
+function gaugeCard({ value, text, title, caption, cls }) {
+  return `<div class="gauge">${ringMarkup({ value, text, size: 92, stroke: 9, cls: cls ?? scoreClass(value), label: title })}<div><strong>${esc(title)}</strong><span>${esc(caption)}</span></div></div>`;
+}
+
+function stackedBar(result) {
+  const total = result.total || 1;
+  const part = (count, cls) => (count ? `<i class="${cls}" style="flex:${count / total}" title="${count}"></i>` : "");
+  return `<div class="bar" role="img" aria-label="${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed">${part(result.passed, "pass")}${part(result.warnings, "warning")}${part(result.failed, "fail")}</div>`;
 }
 
 // Runs doctor one project at a time so a stuck Docker cannot spawn many hung checks.
@@ -213,7 +247,7 @@ function doctorSection(project) {
   if (result.error) return `${head}<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`;
   const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
   const list = issues.length ? issues.map((check) => `<div class="doctor-item ${check.status}"><strong>${esc(check.name)}</strong><span>${esc(check.message)}</span>${check.fix ? `<code>${esc(check.fix)}</code>` : ""}</div>`).join("") : `<div class="doctor-item pass"><strong>All ${result.total} checks passed</strong></div>`;
-  return `${head}<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project)}<span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span></div>${list}</div>`;
+  return `${head}<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong><span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span>${stackedBar(result)}</div></div>${list}</div>`;
 }
 
 const updateState = { running: false, message: "" };

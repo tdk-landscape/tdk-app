@@ -395,6 +395,61 @@
       .skel-side i { display: block; height: 34px; }
       @media (prefers-reduced-motion: reduce) { .skel-title, .skel-sub, .skel-row, .skel-side i { animation: none; } }
       @media (max-width: 840px) { .project-row { grid-template-columns: minmax(180px, 1fr) 92px auto; } .project-row > .status-label { display: none; } }
+
+      /* System palette: macOS colours, consistent everywhere (loaded last on purpose) */
+      :root {
+        --canvas: #f5f5f7; --sidebar: #ececf0; --surface: #ffffff; --surface-alt: #f2f2f7; --raised: #fff;
+        --label: #1d1d1f; --secondary: rgba(60, 60, 67, .82); --tertiary: rgba(60, 60, 67, .62);
+        --line: rgba(60, 60, 67, .2); --line-soft: rgba(60, 60, 67, .12);
+        --accent: #0071e3; --accent-wash: rgba(0, 113, 227, .12);
+        --green: #1d8a3a; --green-wash: rgba(52, 199, 89, .16); --amber: #9a5b00; --amber-wash: rgba(255, 159, 10, .18); --red: #c4271c; --red-wash: rgba(255, 69, 58, .14);
+        --g-ring: #34c759; --a-ring: #ff9f0a; --r-ring: #ff3b30; --track: rgba(60, 60, 67, .14);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --canvas: #1e1e1e; --sidebar: #252528; --surface: #2c2c2e; --surface-alt: #3a3a3c; --raised: #3a3a3c;
+          --label: #f5f5f7; --secondary: rgba(235, 235, 245, .78); --tertiary: rgba(235, 235, 245, .6);
+          --line: rgba(235, 235, 245, .2); --line-soft: rgba(235, 235, 245, .12);
+          --accent: #0a84ff; --accent-wash: rgba(10, 132, 255, .2);
+          --green: #32d74b; --green-wash: rgba(48, 209, 88, .18); --amber: #ffb340; --amber-wash: rgba(255, 159, 10, .2); --red: #ff6961; --red-wash: rgba(255, 69, 58, .2);
+          --g-ring: #30d158; --a-ring: #ff9f0a; --r-ring: #ff453a; --track: rgba(235, 235, 245, .16);
+        }
+      }
+      html.native body::before { display: none; }
+      .button.primary, .native .button.primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: none; filter: none; }
+      .button.primary:hover { filter: brightness(1.08); }
+      @media (prefers-color-scheme: dark) { .button.primary, .native .button.primary { color: #fff; } }
+      .brand-mark, .native .brand-mark { background: var(--accent); box-shadow: none; color: #fff; }
+      .project-symbol, .native .project-symbol { background: var(--accent-wash); color: var(--accent); }
+      .stack-quick .button.primary, .resource-actions .button.primary { background: var(--accent-wash); color: var(--accent); border-color: transparent; }
+      .nav-item.active, .project-item.active { box-shadow: none; background: var(--accent-wash); color: var(--label); }
+      .native .nav-item.active, .native .project-item.active { background: var(--accent-wash); box-shadow: none; }
+
+      /* Rings and gauges */
+      .ring { position: relative; display: inline-grid; place-items: center; flex: none; }
+      .ring svg { position: absolute; inset: 0; }
+      .ring b { position: relative; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--label); }
+      .ring-track { stroke: var(--track); }
+      .ring-fill { stroke: var(--tertiary); transition: stroke-dasharray .5s ease; }
+      .ring.good .ring-fill { stroke: var(--g-ring); }
+      .ring.warn .ring-fill { stroke: var(--a-ring); }
+      .ring.bad .ring-fill { stroke: var(--r-ring); }
+      .gauges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 28px; }
+      .gauge { display: flex; align-items: center; gap: 16px; padding: 16px 18px; border: 1px solid var(--line-soft); border-radius: 16px; background: var(--surface); }
+      .native .gauge { background: var(--glass); border-color: var(--glass-line); box-shadow: var(--glass-shadow); backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5); }
+      .gauge strong { display: block; font-size: 15px; font-weight: 600; }
+      .gauge span { display: block; margin-top: 3px; font-size: 13px; color: var(--secondary); }
+      .score { all: unset; }
+      .doctor-summary { gap: 18px; }
+      .doctor-meta { display: grid; gap: 6px; flex: 1; min-width: 0; }
+      .doctor-meta strong { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+      .doctor-meta span { font-size: 14px; color: var(--secondary); }
+      .bar { display: flex; gap: 3px; height: 8px; border-radius: 99px; overflow: hidden; background: var(--track); max-width: 420px; }
+      .bar i { display: block; min-width: 6px; border-radius: 99px; }
+      .bar .pass { background: var(--g-ring); } .bar .warning { background: var(--a-ring); } .bar .fail { background: var(--r-ring); }
+      .project-row { grid-template-columns: minmax(200px, 1.5fr) 110px 56px minmax(110px, .7fr) auto; }
+      .project-row > .ring { justify-self: center; }
+      @media (max-width: 840px) { .gauges { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
