@@ -29,7 +29,7 @@ async function serverFor(options) {
 
 const supported = { state: "supported", lifecycle: true, version: "1.3.145", minVersion: "1.3.145", installUrl: "https://example.test", message: null };
 
-function fakeCli({ version = "1.3.145", commands = ["start", "stop", "restart"], versionStatus = 0, versionStderr = "" } = {}) {
+function fakeCli({ version = "1.3.145", commands = ["up", "down"], versionStatus = 0, versionStderr = "" } = {}) {
   const calls = [];
   const execute = async (_project, args) => {
     calls.push(args);
@@ -49,12 +49,17 @@ describe("TDK CLI capability probe", () => {
     assert.equal(result.version, "1.3.145");
   });
 
+  it("accepts 1.3.144 because it has tdk up and tdk down", async () => {
+    const result = await probeCli(fakeCli({ version: "1.3.144" }).execute);
+    assert.equal(result.lifecycle, true);
+  });
+
   it("reports stable 1.3.140 as unsupported with an actionable message", async () => {
     const { execute } = fakeCli({ version: "1.3.140", commands: [] });
     const result = await probeCli(execute);
     assert.equal(result.state, "unsupported");
     assert.equal(result.lifecycle, false);
-    assert.match(result.message, /1\.3\.140.*Update to/);
+    assert.match(result.message, /1\.3\.140.*Update the CLI/);
   });
 
   it("reports a missing binary and a failing version check separately", async () => {
@@ -90,7 +95,7 @@ describe("TDK App local server", () => {
     assert.equal(response.status, 409);
     const body = await response.json();
     assert.equal(body.code, "cli_unsupported");
-    assert.match(body.error, /Update to/);
+    assert.match(body.error, /Update the CLI/);
     assert(!calls.some((args) => args.includes("--json")));
   });
 
@@ -176,9 +181,24 @@ describe("TDK App local server", () => {
     const response = await fetch(`${origin}/api/actions`, {
       method: "POST",
       headers: { "content-type": "application/json", origin, "x-tdk-token": started.token },
-      body: JSON.stringify({ project: "a", operation: "restart", resources: ["api"] }),
+      body: JSON.stringify({ project: "a", operation: "start", stack: "shop", resources: ["api"] }),
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(calls, [["restart", "--json", "--only", "api"]]);
+    assert.deepEqual(calls, [["up", "--json", "shop", "--only", "api"]]);
+  });
+
+  it("maps whole-project stop and restart to tdk down / tdk up and refuses scoped ones", async () => {
+    const calls = [];
+    const runCommand = async (_project, args) => { calls.push(args); return { status: 0, stderr: "", stdout: JSON.stringify({ data: {} }) }; };
+    const started = await serverFor({ projects: [{ id: "a", name: "a", root: "/projects/a" }], runCommand, probe: async () => supported });
+    const origin = new URL(started.url).origin;
+    const send = (body) => fetch(`${origin}/api/actions`, { method: "POST", headers: { "content-type": "application/json", origin, "x-tdk-token": started.token }, body: JSON.stringify(body) });
+    assert.equal((await send({ project: "a", operation: "stop" })).status, 200);
+    assert.deepEqual(calls.splice(0), [["down", "--json", "--force"]]);
+    assert.equal((await send({ project: "a", operation: "restart" })).status, 200);
+    assert.deepEqual(calls.splice(0), [["down", "--json", "--force"], ["up", "--json"]]);
+    assert.equal((await send({ project: "a", operation: "stop", stack: "shop" })).status, 400);
+    assert.equal((await send({ project: "a", operation: "restart", resources: ["api"] })).status, 400);
+    assert.equal(calls.length, 0);
   });
 });

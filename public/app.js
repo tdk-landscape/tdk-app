@@ -59,7 +59,7 @@ function actionButton(action, project, scope = "project", name = "", label = act
 
 function actionSet(project, scope = "project", name = "", compact = false) {
   const klass = compact ? "row-actions" : "detail-actions";
-  return `<div class="${klass}">${actionButton("start", project, scope, name, compact ? "Start" : "Start")}${actionButton("stop", project, scope, name, "Stop")}${actionButton("restart", project, scope, name, "Restart")}</div>`;
+  return `<div class="${klass}">${actionButton("start", project, scope, name, "Start")}${scope === "project" ? `${actionButton("stop", project, scope, name, "Stop")}${actionButton("restart", project, scope, name, "Restart")}` : ""}</div>`;
 }
 
 function filteredProjects() {

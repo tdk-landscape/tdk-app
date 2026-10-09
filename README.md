@@ -2,7 +2,7 @@
 
 TDK App is a local browser dashboard for operating TDK projects. It shows project, stack, and resource health, recent logs, endpoints, and configured port conflicts. It can start, stop, or restart a project, stack, or resource and open its folder or a terminal.
 
-The app runs on your machine and uses the installed `tdk` CLI for status and lifecycle operations. It does not connect to a hosted control plane. Start, Stop, and Restart need a TDK CLI that provides the scoped `tdk start`, `tdk stop`, and `tdk restart` commands (TDK CLI 1.3.145 or newer). On load the app runs non-mutating probes (`tdk --version` and `tdk <command> --help`). If the CLI is older, missing, or not responding, lifecycle controls are disabled with an explanation, `POST /api/actions` returns HTTP 409 (`cli_unsupported`) without running anything, and status, endpoints, ports, logs, and folder/terminal actions keep working.
+The app runs on your machine and uses the installed `tdk` CLI for status and lifecycle operations. It does not connect to a hosted control plane. Start runs `tdk up` (optionally for one stack or resources). Stop runs `tdk down` and Restart runs `tdk down` then `tdk up`; both act on the whole project because `tdk down` has no scope. On load the app runs non-mutating probes (`tdk --version`, `tdk up --help`, `tdk down --help`). If the CLI is older, missing, or not responding, lifecycle controls are disabled with an explanation, `POST /api/actions` returns HTTP 409 (`cli_unsupported`) without running anything, and status, endpoints, ports, logs, and folder/terminal actions keep working.
 
 ## Run from a checkout
 

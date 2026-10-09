@@ -240,9 +240,10 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
 }
 
 export const MANUAL_UPDATE_COMMAND = "curl -fsSL https://tdk-landscape.github.io/install.sh | sh";
-export const MIN_CLI_VERSION = "1.3.145";
+export const MIN_CLI_VERSION = null;
 const INSTALL_URL = "https://github.com/tdk-landscape/tdk-cli-core#install";
-const LIFECYCLE_COMMANDS = ["start", "stop", "restart"];
+// The CLI starts and stops through `up` and `down` (no scoped start/stop/restart exist).
+const LIFECYCLE_COMMANDS = ["up", "down"];
 
 // Non-mutating probe: `tdk --version` for display and `tdk <cmd> --help` per lifecycle command.
 // Commander prints command-specific help ("Usage: tdk <cmd>") only when the command exists;
@@ -258,7 +259,7 @@ export async function probeCli(execute, cwd = process.cwd()) {
       state: missing ? "missing" : "failed",
       lifecycle: false,
       message: missing
-        ? `The tdk CLI was not found. Install TDK CLI ${MIN_CLI_VERSION} or newer, or set TDK_BIN to its path.`
+        ? `The tdk CLI was not found. Install the TDK CLI, or set TDK_BIN to its path.`
         : `The tdk CLI did not respond to a version check (${versionResult.stderr.trim() || "timeout or non-zero exit"}). Check TDK_BIN and your install.`,
     };
   }
@@ -271,7 +272,7 @@ export async function probeCli(execute, cwd = process.cwd()) {
         version,
         state: "unsupported",
         lifecycle: false,
-        message: `TDK CLI ${version ?? "(unknown version)"} does not support \`tdk ${LIFECYCLE_COMMANDS.join("/")}\`. Update to ${MIN_CLI_VERSION} or newer to enable Start, Stop and Restart; status, logs and endpoints still work.`,
+        message: `TDK CLI ${version ?? "(unknown version)"} does not support \`tdk ${LIFECYCLE_COMMANDS.join("/")}\`. Update the CLI to enable Start, Stop and Restart; status, logs and endpoints still work.`,
       };
     }
   }
@@ -421,16 +422,17 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
         if (!cli.lifecycle) {
           return sendJson(response, 409, { error: cli.message, code: "cli_unsupported", cli: { state: cli.state, version: cli.version, minVersion: cli.minVersion, installUrl: cli.installUrl } });
         }
-        const args = [body.operation, "--json"];
-        if (body.stack != null && body.stack !== "") {
-          if (!isArgName(body.stack)) return sendJson(response, 400, { error: "Invalid stack name." });
-          args.push(body.stack);
-        }
-        if (body.resources != null) {
-          if (!Array.isArray(body.resources) || body.resources.length > 30 || !body.resources.every((name) => isArgName(name))) return sendJson(response, 400, { error: "Invalid resource selection." });
-          if (body.resources.length) args.push("--only", ...body.resources);
-        }
-        const result = readMachine(await runCommand(project, args, { timeoutMs: 180_000 }));
+        const hasStack = body.stack != null && body.stack !== "";
+        if (hasStack && !isArgName(body.stack)) return sendJson(response, 400, { error: "Invalid stack name." });
+        if (body.resources != null && (!Array.isArray(body.resources) || body.resources.length > 30 || !body.resources.every((name) => isArgName(name)))) return sendJson(response, 400, { error: "Invalid resource selection." });
+        const scoped = hasStack || Boolean(body.resources?.length);
+        // `tdk down` has no scope, so stop and restart act on the whole project.
+        if (scoped && body.operation !== "start") return sendJson(response, 400, { error: "TDK can only stop or restart a whole project. Start accepts a stack or resources." });
+        const up = ["up", "--json"];
+        if (hasStack) up.push(body.stack);
+        if (body.resources?.length) up.push("--only", ...body.resources);
+        if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
+        const result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
       }
       if (url.pathname === "/api/open" && request.method === "POST") {

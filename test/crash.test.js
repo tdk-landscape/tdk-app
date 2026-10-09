@@ -230,7 +230,7 @@ describe("API input validation", () => {
     const { server } = await boot({ runCommand: async (_project, args) => { calls.push(args); return okEnvelope({}); } });
     const response = await post(server, "/api/actions", { project: "a", operation: "start", resources: ["api; rm -rf /", "$(whoami)", "`id`"] });
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0], ["start", "--json", "--only", "api; rm -rf /", "$(whoami)", "`id`"]);
+    assert.deepEqual(calls[0], ["up", "--json", "--only", "api; rm -rf /", "$(whoami)", "`id`"]);
   });
 
   it("rejects /api/open with bad kinds and projects", async () => {
