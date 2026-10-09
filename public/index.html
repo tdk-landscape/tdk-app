@@ -647,6 +647,16 @@
         .resource-row > .resource-actions { grid-column: 2; grid-row: 2; justify-self: end; }
         .resource-row > * { min-width: 0; }
       }
+
+      /* Overview rows: on narrow windows the title sits on top and the buttons get their own line */
+      @media (max-width: 760px) {
+        .project-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 10px; column-gap: 12px; padding: 12px 14px; }
+        .project-row > .project-open { grid-column: 1; grid-row: 1; min-width: 0; }
+        .project-row > .ring { grid-column: 2; grid-row: 1; justify-self: end; }
+        .project-row > .status-label { display: inline-flex; grid-column: 1; grid-row: 2; justify-self: start; }
+        .project-row > .row-meta { display: inline-flex; grid-column: 2; grid-row: 2; justify-self: end; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .project-row > .row-actions { grid-column: 1 / -1; grid-row: 3; justify-self: start; }
+      }
     </style>
   </head>
   <body>
