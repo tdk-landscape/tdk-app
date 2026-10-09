@@ -703,6 +703,30 @@
       .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(180deg, var(--p-top), var(--p-bot)); }
       .row-actions .button:active:not(:disabled) { background: var(--gb-bg-press); }
       .row-actions .button.primary:active:not(:disabled) { background: var(--p-bot); }
+
+      /* Config & drift panel */
+      .badge.none { background: var(--surface-alt); color: var(--secondary); }
+      .badge.good { background: var(--green-wash); color: var(--green); }
+      .badge.bad { background: var(--red-wash); color: var(--red); }
+      .badge { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: 6px; font: 600 13px var(--sans); }
+      .config-box { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+      .config-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .config-when { font-size: 13px; color: var(--secondary); }
+      .log-title { font: 600 13px var(--sans); color: var(--secondary); }
+      .log-list { display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+      .log-empty { font-size: 13px; color: var(--secondary); padding: 6px 0; }
+      .log-entry { border: 1px solid var(--line-soft); border-radius: 6px; background: var(--surface-alt); }
+      .log-entry summary { display: flex; align-items: center; gap: 12px; padding: 7px 10px; cursor: pointer; font-size: 13px; list-style: none; }
+      .log-entry summary::-webkit-details-marker { display: none; }
+      .log-entry summary::before { content: "›"; color: var(--tertiary); transition: transform .12s ease; display: inline-block; width: 8px; }
+      .log-entry[open] summary::before { transform: rotate(90deg); }
+      .log-when { color: var(--secondary); font-variant-numeric: tabular-nums; }
+      .log-action { font-weight: 600; text-transform: capitalize; }
+      .log-exit { margin-left: auto; font-variant-numeric: tabular-nums; }
+      .log-entry.ok .log-exit { color: var(--green); }
+      .log-entry.fail .log-exit { color: var(--red); }
+      .log-ms { color: var(--tertiary); font-variant-numeric: tabular-nums; }
+      .log-entry pre { margin: 0; padding: 8px 10px 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; color: var(--label); max-height: 240px; overflow: auto; border-top: 1px solid var(--line-soft); }
     </style>
   </head>
   <body>

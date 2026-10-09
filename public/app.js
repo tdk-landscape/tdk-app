@@ -196,14 +196,12 @@ function renderDetail(project) {
     ${project.error ? `<div class="notice show error">Could not read status: ${esc(project.error)}</div>` : ""}
     <div class="detail-head"><div class="detail-title"><button class="back-link" type="button" data-view-overview>← All projects</button><h1>${esc(project.name)}</h1><code class="detail-path">${esc(project.path)}</code></div>
       <div class="detail-actions">${actionSet(project)}<span class="toolbar-sep"></span>${iconButton("open-project", "Open folder in Finder", { project: project.id })}${iconButton("open-terminal", "Open in Terminal", { project: project.id })}${menuButton([
-        { action: "config-regenerate", label: "Regenerate configs", data: { project: project.id } },
-        { action: "config-verify", label: "Verify configs", data: { project: project.id } },
-        "-",
         { action: "hide-project", label: hidden.has(project.id) ? "Unhide project" : "Hide project", data: { project: project.id } },
       ])}</div></div>
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
+    ${configSection(project)}
     ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="link-btn" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="link-btn" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
   </div>`;
 }
@@ -645,16 +643,7 @@ async function handleCrud(action, projectId, name, dataset) {
   }
   if (action === "new-project") { await openNewProject(); return true; }
   if (action === "config-regenerate" || action === "config-verify") {
-    const operation = action === "config-regenerate" ? "regenerate" : "verify";
-    document.querySelector("#log-title").textContent = `${operation === "regenerate" ? "Regenerate configs" : "Verify configs"} · ${project?.name ?? ""}`;
-    document.querySelector("#log-body").textContent = "Running…";
-    document.querySelector("#logs").showModal();
-    try {
-      const result = await post("/api/config", { project: projectId, operation });
-      document.querySelector("#log-body").textContent = `${result.ok ? "Success" : "Problem found"}\n\n${result.output || "No output."}`;
-    } catch (error) {
-      document.querySelector("#log-body").textContent = error.message;
-    }
+    await runConfig(projectId, action === "config-regenerate" ? "regenerate" : "verify");
     return true;
   }
   if (!project) return false;
@@ -756,3 +745,68 @@ document.addEventListener("click", (event) => {
   else if (event.target.closest(".menu [data-action]")) event.target.closest(".menu").hidden = true;
 }, true);
 document.addEventListener("keydown", (event) => { if (event.key === "Escape") for (const menu of document.querySelectorAll(".menu")) menu.hidden = true; });
+
+// ---------- Config & drift panel ----------
+const configState = new Map(); // projectId -> { status, entries, loading, error }
+
+async function loadConfig(projectId, { checkIfNever = false } = {}) {
+  const current = configState.get(projectId) ?? {};
+  if (current.loading) return;
+  configState.set(projectId, { ...current, loading: true });
+  try {
+    const data = await api(`/api/config/log?project=${encodeURIComponent(projectId)}`);
+    const never = data.status == null;
+    configState.set(projectId, { status: data.status, entries: data.entries, loading: false, error: "" });
+    if (never && checkIfNever) await runConfig(projectId, "verify", { quiet: true });
+  } catch (error) {
+    configState.set(projectId, { ...current, loading: false, error: error.message });
+  }
+  render();
+}
+
+async function runConfig(projectId, operation, { quiet = false } = {}) {
+  const current = configState.get(projectId) ?? { entries: [] };
+  configState.set(projectId, { ...current, loading: true, running: operation });
+  render();
+  try {
+    const result = await post("/api/config", { project: projectId, operation });
+    const entries = result.entry ? [result.entry, ...(current.entries ?? [])].slice(0, 50) : current.entries ?? [];
+    const status = operation === "verify" && result.entry ? { ok: result.entry.ok, at: result.entry.at, exitCode: result.entry.exitCode } : current.status ?? null;
+    configState.set(projectId, { status, entries, loading: false, running: null, error: "" });
+    if (!quiet) showNotice(`${{ verify: "Drift check", migrate: "Migration", regenerate: "Regenerate" }[operation]} ${result.ok ? "finished" : "reported a problem"}. See the log below.`, !result.ok);
+  } catch (error) {
+    configState.set(projectId, { ...current, loading: false, running: null, error: error.message });
+  }
+  render();
+}
+
+function driftBadge(status) {
+  if (!status) return `<span class="badge none">Not checked yet</span>`;
+  return status.ok ? `<span class="badge good">In sync</span>` : `<span class="badge bad">Drift or error</span>`;
+}
+
+function configSection(project) {
+  const state = configState.get(project.id);
+  if (!state) void loadConfig(project.id, { checkIfNever: true });
+  const busy = state?.loading;
+  const status = state?.status ?? null;
+  const entries = state?.entries ?? [];
+  const when = status?.at ? new Date(status.at).toLocaleString() : "";
+  const right = `<button class="link-btn" type="button" data-config="verify" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>${busy && state?.running === "verify" ? "Checking…" : "Check now"}</button><button class="link-btn" type="button" data-config="migrate" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>Migrate schema</button><button class="link-btn" type="button" data-config="regenerate" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>Regenerate</button>`;
+  const log = entries.length
+    ? entries.slice(0, 20).map((entry) => `<details class="log-entry ${entry.ok ? "ok" : "fail"}"><summary><span class="log-when">${esc(new Date(entry.at).toLocaleString())}</span><span class="log-action">${esc(entry.action)}</span><span class="log-exit">exit ${entry.exitCode ?? "—"}</span><span class="log-ms">${(entry.durationMs / 1000).toFixed(1)}s</span></summary><pre>${esc(entry.output || "(no output)")}</pre></details>`).join("")
+    : `<div class="log-empty">No config runs yet. ${state?.error ? esc(state.error) : "Run a check to see its output here."}</div>`;
+  const body = `<div class="config-box"><div class="config-summary">${driftBadge(status)}<span class="config-when">${status ? `Last checked ${esc(when)}` : busy ? "Checking…" : ""}</span></div>${state?.error && entries.length ? `<div class="notice show error">${esc(state.error)}</div>` : ""}<div class="log-title">Run log</div><div class="log-list">${log}</div></div>`;
+  return collapsible("config", "Config & drift", body, right);
+}
+
+content.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-config]");
+  if (!button) return;
+  const { config: operation, project } = button.dataset;
+  if (operation !== "verify") {
+    const what = operation === "migrate" ? "Migrate every service.json to the current schema? This rewrites those files (use git to review or revert)." : "Regenerate the master config files from .tdk/project.json? This rewrites generated files (use git to review or revert).";
+    if (!window.confirm(what)) return;
+  }
+  await runConfig(project, operation);
+});
