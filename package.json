@@ -1,0 +1,17 @@
+{
+  "name": "@tdk-landscape/tdk-app",
+  "version": "0.1.0",
+  "description": "Local desktop command center for TDK projects",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tdk-app": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

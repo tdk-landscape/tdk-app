@@ -1,0 +1,294 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
+
+const PROJECT_FILE = join(".tdk", "project.json");
+const PORT_FILE = join(".tdk", ".tdk-out", "tilt-port.json");
+const MAX_BODY = 16 * 1024;
+const HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+
+export function discoverProjectRoot(start = process.cwd()) {
+  let directory = resolve(start);
+  while (true) {
+    if (existsSync(join(directory, PROJECT_FILE))) return directory;
+    const parent = dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
+  }
+}
+
+function projectName(root) {
+  try {
+    const value = JSON.parse(readFileSync(join(root, PROJECT_FILE), "utf8"));
+    return typeof value.project?.name === "string" ? value.project.name : basename(root);
+  } catch {
+    return basename(root);
+  }
+}
+
+export function resolveProjects(currentRoot, additionalRoots = []) {
+  const roots = [...new Set([...(currentRoot ? [resolve(currentRoot)] : []), ...additionalRoots.map((root) => resolve(root))])];
+  return roots.map((root) => {
+    if (!isAbsolute(root) || !existsSync(join(root, PROJECT_FILE))) {
+      throw new Error(`Not a TDK project directory: ${root}`);
+    }
+    return {
+      id: `project-${createHash("sha256").update(root).digest("hex").slice(0, 10)}`,
+      name: projectName(root),
+      root,
+    };
+  });
+}
+
+function sameSecret(left, right) {
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function sendJson(response, status, data) {
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
+  });
+  response.end(JSON.stringify(data));
+}
+
+async function readBody(request) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk.toString();
+    if (body.length > MAX_BODY) throw new Error("Request body is too large.");
+  }
+  if (!body) return {};
+  const value = JSON.parse(body);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a JSON object.");
+  }
+  return value;
+}
+
+function readMachine(result) {
+  let envelope;
+  try {
+    envelope = JSON.parse(result.stdout);
+  } catch {
+    throw new Error(result.stderr.trim() || `TDK returned invalid JSON (exit ${result.status ?? 1}).`);
+  }
+  if ((result.status !== 0 || envelope.errors?.length) && envelope.data == null) {
+    throw new Error(envelope.errors?.map((error) => error.message).filter(Boolean).join("\n") || result.stderr.trim() || "TDK command failed.");
+  }
+  if (envelope.data == null) throw new Error("TDK returned no data.");
+  return envelope.data;
+}
+
+export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", timeoutMs = 30_000 } = {}) {
+  return new Promise((resolvePromise) => {
+    let savedPort;
+    try {
+      const value = JSON.parse(readFileSync(join(project.root, PORT_FILE), "utf8"));
+      if (Number.isInteger(value.port) && value.port > 0 && value.port <= 65535) savedPort = value.port;
+    } catch {}
+    const env = { ...process.env, ...(savedPort ? { TILT_PORT: String(savedPort) } : {}) };
+    const child = spawn(binary, args, {
+      cwd: project.root,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolvePromise({ status, stdout, stderr });
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      finish(null);
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      if (stdout.length > 2_000_000) {
+        child.kill("SIGTERM");
+        finish(null);
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 2_000_000) {
+        child.kill("SIGTERM");
+        finish(null);
+      }
+    });
+    child.once("error", (error) => {
+      stderr += error.message;
+      finish(null);
+    });
+    child.once("close", (code) => finish(code));
+  });
+}
+
+async function projectStatus(project, execute) {
+  const status = readMachine(await execute(project, ["status", "--json", "--tilt"]));
+  let services = [];
+  try {
+    services = readMachine(await execute(project, ["networks", "--json"])).services ?? [];
+  } catch {}
+  const urls = new Map(services.map((service) => [service.name, service.url]));
+  return {
+    project,
+    resources: (status.resources ?? []).map((resource) => ({
+      ...resource,
+      url: safeUrl(urls.get(resource.name) ?? resource.url),
+    })),
+    stacks: status.stacks ?? [],
+    ports: status.ports ?? [],
+    tiltRunning: Boolean(status.tilt?.resources),
+  };
+}
+
+function safeUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function findConflicts(snapshots) {
+  const owners = new Map();
+  for (const snapshot of snapshots) {
+    for (const port of snapshot.ports) {
+      const claimants = owners.get(port.hostPort) ?? [];
+      claimants.push({ projectId: snapshot.project.id, label: `${snapshot.project.name} (${port.name})` });
+      owners.set(port.hostPort, claimants);
+    }
+  }
+  return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
+}
+
+export function startAppServer({ projects, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
+  if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
+  const server = createServer((request, response) => {
+    void (async () => {
+      const address = server.address();
+      const actualPort = typeof address === "object" && address ? address.port : port;
+      const origin = `http://127.0.0.1:${actualPort}`;
+      if (request.headers.host !== `127.0.0.1:${actualPort}`) return sendJson(response, 403, { error: "Invalid host." });
+      const url = new URL(request.url ?? "/", origin);
+      if (url.pathname === "/" && request.method === "GET") {
+        if (!sameSecret(url.searchParams.get("token") ?? "", token)) return sendJson(response, 404, { error: "Not found." });
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        });
+        return response.end(HTML.replace("__TDK_CENTER_TOKEN__", token).replaceAll("tdk center", "tdk-app"));
+      }
+      if (!url.pathname.startsWith("/api/")) return sendJson(response, 404, { error: "Not found." });
+      if (!sameSecret(request.headers["x-tdk-token"]?.toString() ?? "", token)) return sendJson(response, 403, { error: "Invalid session token." });
+      if (request.headers.origin && request.headers.origin !== origin) return sendJson(response, 403, { error: "Invalid origin." });
+      if (request.method === "POST" && request.headers.origin !== origin) return sendJson(response, 403, { error: "A same-origin request is required." });
+
+      if (url.pathname === "/api/projects" && request.method === "GET") {
+        const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand)));
+        const conflicts = findConflicts(snapshots);
+        return sendJson(response, 200, {
+          projects: snapshots.map((snapshot) => ({
+            id: snapshot.project.id,
+            name: snapshot.project.name,
+            path: snapshot.project.root,
+            tiltRunning: snapshot.tiltRunning,
+            resources: snapshot.resources,
+            stacks: snapshot.stacks,
+            ports: snapshot.ports.map((port) => ({ name: port.name, port: port.hostPort })),
+            conflicts: conflicts.filter((conflict) => conflict.claimants.some((claimant) => claimant.projectId === snapshot.project.id)).map((conflict) => ({
+              port: conflict.port,
+              claimants: conflict.claimants.map((claimant) => claimant.label),
+            })),
+          })),
+        });
+      }
+      if (url.pathname === "/api/logs" && request.method === "GET") {
+        const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
+        const resource = url.searchParams.get("resource");
+        if (!project || !resource) return sendJson(response, 400, { error: "Select a project and resource." });
+        const result = readMachine(await runCommand(project, ["logs", "--json", "--tail", "100", "--service", resource]));
+        return sendJson(response, 200, { lines: result.lines ?? [] });
+      }
+      if (url.pathname === "/api/actions" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = projects.find((entry) => entry.id === body.project);
+        if (!project || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
+        const args = [body.operation, "--json"];
+        if (typeof body.stack === "string" && body.stack) args.push(body.stack);
+        if (Array.isArray(body.resources)) {
+          const names = body.resources.filter((name) => typeof name === "string" && name.length > 0);
+          if (names.length !== body.resources.length || names.length > 30) return sendJson(response, 400, { error: "Invalid resource selection." });
+          if (names.length) args.push("--only", ...names);
+        }
+        const result = readMachine(await runCommand(project, args, { timeoutMs: 180_000 }));
+        return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
+      }
+      if (url.pathname === "/api/open" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = projects.find((entry) => entry.id === body.project);
+        if (!project || !["project", "terminal"].includes(body.kind)) return sendJson(response, 400, { error: "Choose a valid project and open action." });
+        await openPath(project.root, body.kind);
+        return sendJson(response, 200, { ok: true });
+      }
+      return sendJson(response, 404, { error: "Not found." });
+    })().catch((error) => {
+      if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      else response.destroy(error instanceof Error ? error : undefined);
+    });
+  });
+  return new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.removeListener("error", reject);
+      const address = server.address();
+      resolvePromise({ server, token, url: `http://127.0.0.1:${address.port}/?token=${token}` });
+    });
+  });
+}
+
+export function openProjectPath(root, kind) {
+  let command;
+  let args;
+  if (kind === "project") {
+    if (process.platform === "darwin") [command, args] = ["open", [root]];
+    else if (process.platform === "win32") [command, args] = ["explorer.exe", [root]];
+    else [command, args] = ["xdg-open", [root]];
+  } else if (process.platform === "darwin") [command, args] = ["open", ["-a", "Terminal", root]];
+  else if (process.platform === "win32") [command, args] = ["wt.exe", ["-d", root]];
+  else [command, args] = ["x-terminal-emulator", ["--working-directory", root]];
+  return spawnDetached(command, args, root, process.platform === "win32");
+}
+
+export function openBrowser(url) {
+  if (process.platform === "darwin") return spawnDetached("open", [url]);
+  if (process.platform === "win32") return spawnDetached("rundll32.exe", ["url.dll,FileProtocolHandler", url]);
+  return spawnDetached("xdg-open", [url]);
+}
+
+function spawnDetached(command, args, cwd, windowsHide = true) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(command, args, { cwd, detached: true, stdio: "ignore", windowsHide });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolvePromise();
+    });
+  });
+}

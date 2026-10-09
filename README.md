@@ -1,0 +1,38 @@
+# TDK App
+
+TDK App is a local browser dashboard for operating TDK projects. It shows project, stack, and resource health, recent logs, endpoints, and configured port conflicts. It can start, stop, or restart a project, stack, or resource and open its folder or a terminal.
+
+The app runs on your machine and uses the installed `tdk` CLI for status and lifecycle operations. It does not connect to a hosted control plane. The current `tdk-cli-core` implementation must be installed with the scoped `tdk start`, `tdk stop`, and `tdk restart` commands.
+
+## Run from a checkout
+
+Requires Node.js 22.12 or newer and TDK CLI on `PATH`.
+
+```sh
+npm start
+npm start -- --project ~/src/storefront --project ~/src/billing
+npm start -- --port 43120
+```
+
+TDK App includes the project containing the current directory. Additional project roots are explicit and must contain `.tdk/project.json`. `--port 0` (the default) selects an available local port.
+
+The server binds only to `127.0.0.1`, protects the browser session with a random in-memory token, and exits with the app process. Closing the dashboard does not stop project resources. The terminal dashboard `tdk ui` remains available independently.
+
+## Install as a command
+
+After a package release, install the published package globally and run:
+
+```sh
+npm install --global @tdk-landscape/tdk-app
+tdk-app
+```
+
+The package is not published yet; use the checkout instructions above until a release is available.
+
+## Development
+
+```sh
+npm test
+```
+
+The server uses Node.js built-ins only. Set `TDK_BIN` to the path of a TDK CLI executable if it is not named `tdk` or is not on `PATH`.
