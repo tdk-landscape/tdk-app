@@ -27,7 +27,7 @@ async function api(url, options = {}) {
     },
   });
   const body = await response.json();
-  if (!response.ok) throw Object.assign(new Error(body.error || "Request failed."), { code: body.code });
+  if (!response.ok) throw Object.assign(new Error(body.error || "Request failed."), { code: body.code, lowDisk: body.lowDisk });
   return body;
 }
 
@@ -391,6 +391,7 @@ function applyBusy() {
 }
 
 let fixingDocker = false;
+const DISK_COMMANDS = ["Commands you can run in Terminal to free space:", "  docker system prune -af        # unused images and build cache (needs Docker running)", "  npm cache clean --force", "  bun pm cache rm", "  brew cleanup -s", "  rm -rf ~/Library/Caches/*"].join("\n");
 
 async function fixDockerAndRetry(button) {
   if (fixingDocker) return;
@@ -398,7 +399,11 @@ async function fixDockerAndRetry(button) {
   showNotice("Restarting Docker Desktop… this usually takes 30–90 seconds. The start will continue automatically once Docker answers.", false, true);
   try {
     const result = await api("/api/docker/restart", { method: "POST", body: "{}" });
-    if (!result.ok) return showNotice(result.message, true, true);
+    if (!result.ok) {
+      return result.lowDisk
+        ? showNotice(`${result.message}\n\n${DISK_COMMANDS}`, true, true, { label: "Free up space…", run: openDiskCleanup })
+        : showNotice(result.message, true, true);
+    }
     showNotice("Docker is running again. Continuing…", false, true);
   } catch (error) {
     return showNotice(`Could not restart Docker: ${error.message}`, true, true);
@@ -457,7 +462,9 @@ async function handleAction(button) {
   } catch (error) {
     if (error.code === "docker_unavailable") {
       // Offer to fix Docker and then carry on with the original action.
-      showNotice(error.message, true, true, { label: "Restart Docker and continue", run: () => fixDockerAndRetry(button) });
+      showNotice(error.lowDisk ? `${error.message}\n\n${DISK_COMMANDS}` : error.message, true, true, error.lowDisk
+        ? { label: "Free up space…", run: openDiskCleanup }
+        : { label: "Restart Docker and continue", run: () => fixDockerAndRetry(button) });
     } else showNotice(error.message, true);
   } finally {
     busy.delete(project);
@@ -554,7 +561,8 @@ function fieldMarkup(field) {
   const id = `f-${field.name}`;
   const hint = field.hint ? `<small>${esc(field.hint)}</small>` : "";
   if (field.type === "select") return `<label class="field" for="${id}">${esc(field.label)}<select id="${id}" name="${esc(field.name)}">${field.options.map((option) => `<option value="${esc(option.value)}" ${option.value === field.value ? "selected" : ""}>${esc(option.label)}</option>`).join("")}</select>${hint}</label>`;
-  if (field.type === "checks") return `<div class="field">${esc(field.label)}<div class="checks">${field.options.length ? field.options.map((option) => `<label><input type="checkbox" name="${esc(field.name)}" value="${esc(option)}"> ${esc(option)}</label>`).join("") : "<span>No resources yet.</span>"}</div>${hint}</div>`;
+  if (field.type === "note") return `<pre class="form-note">${esc(field.value)}</pre>`;
+  if (field.type === "checks") return `<div class="field">${esc(field.label)}<div class="checks">${field.options.length ? field.options.map((option) => { const o = typeof option === "string" ? { value: option, label: option } : option; return `<label ${o.disabled ? 'class="disabled"' : ""}><input type="checkbox" name="${esc(field.name)}" value="${esc(o.value)}" ${o.disabled ? "disabled" : ""}> <span>${esc(o.label)}${o.note ? `<small>${esc(o.note)}</small>` : ""}</span></label>`; }).join("") : "<span>Nothing here yet.</span>"}</div>${hint}</div>`;
   return `<label class="field" for="${id}">${esc(field.label)}<input id="${id}" name="${esc(field.name)}" type="${field.type === "number" ? "number" : "text"}" value="${esc(field.value ?? "")}" placeholder="${esc(field.placeholder ?? "")}" autocomplete="off" spellcheck="false" ${field.list ? `list="${id}-list"` : ""}>${field.list ? `<datalist id="${id}-list">${field.list.map((item) => `<option value="${esc(item)}"></option>`).join("")}</datalist>` : ""}${hint}</label>`;
 }
 
@@ -576,6 +584,7 @@ function openForm({ title, intro = "", fields, submit, validate, run }) {
     errorBox.hidden = true;
     const values = {};
     for (const field of fields) {
+      if (field.type === "note") continue;
       if (field.type === "checks") values[field.name] = [...form.querySelectorAll(`[name="${field.name}"]:checked`)].map((input) => input.value);
       else values[field.name] = form.elements[field.name].value.trim();
     }
@@ -701,3 +710,24 @@ async function openNewProject() {
 }
 
 document.querySelector("#new-project-nav").addEventListener("click", () => openNewProject());
+
+async function openDiskCleanup() {
+  let info;
+  try { info = await api("/api/disk"); } catch (error) { return showNotice(error.message, true); }
+  const mb = (value) => (value == null ? "" : value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${value} MB`);
+  openForm({
+    title: "Free up space",
+    intro: `${info.freeGb ?? "?"} GB free. Only caches and unused Docker data are listed; your projects, Downloads and Trash are never touched.`,
+    fields: [
+      { name: "ids", label: "Clean", type: "checks", options: info.items.map((item) => ({ value: item.id, label: `${item.label}${item.sizeMb != null ? ` · ${mb(item.sizeMb)}` : ""}`, note: item.requiresDocker && !item.available ? "Docker is not responding, so this is unavailable." : item.note, disabled: !item.available })) },
+      { name: "commands", type: "note", value: DISK_COMMANDS },
+    ],
+    submit: "Clean selected",
+    validate: (v) => (v.ids.length ? "" : "Select at least one item."),
+    run: async (v) => {
+      const result = await post("/api/disk/clean", { ids: v.ids });
+      const lines = result.results.map((entry) => `${entry.ok ? "✓" : "✗"} ${entry.label}${entry.ok ? "" : ` — ${entry.output}`}`);
+      return { ok: result.results.every((entry) => entry.ok), output: `${lines.join("\n")}\n\nFreed ${result.freedGb ?? "?"} GB · ${result.freeGb ?? "?"} GB free now.` };
+    },
+  });
+}

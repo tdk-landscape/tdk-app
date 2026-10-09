@@ -726,6 +726,54 @@ describe("CRUD actions through the TDK CLI", () => {
   });
 });
 
+describe("disk cleanup", () => {
+  it("lists only fixed candidates with sizes and Docker availability", async () => {
+    const { server } = await boot({ dockerCheck: async () => false, runCommand: async (_p, args, options) => (options?.binary === "du" ? { status: 0, stdout: `${2 * 1024 * 1024}\t${args[1]}`, stderr: "" } : { status: 0, stdout: "", stderr: "" }) });
+    const response = await raw(server, { path: "/api/disk" });
+    assert.equal(response.status, 200);
+    const docker = response.json.items.find((item) => item.id === "docker");
+    assert.equal(docker.available, false);
+    assert(response.json.items.every((item) => !/Downloads|Trash/.test(item.label)));
+    assert(response.json.items.some((item) => item.sizeMb === 2048) || response.json.items.every((item) => item.sizeMb == null));
+  });
+
+  it("runs the mapped command for each chosen id and nothing else", async () => {
+    const calls = [];
+    const { server } = await boot({ runCommand: async (_p, args, options) => { calls.push([options?.binary, ...args]); return { status: 0, stdout: "", stderr: "" }; } });
+    const response = await post(server, "/api/disk/clean", { ids: ["npm", "bun", "npm"] });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls, [["npm", "cache", "clean", "--force"], ["bun", "pm", "cache", "rm"]]);
+    assert.equal(response.json.results.length, 2);
+  });
+
+  it("reports a failing cleanup per item without throwing", async () => {
+    const { server } = await boot({ runCommand: async () => ({ status: 1, stdout: "", stderr: "brew: command not found" }) });
+    const response = await post(server, "/api/disk/clean", { ids: ["brew"] });
+    assert.equal(response.status, 200);
+    assert.equal(response.json.results[0].ok, false);
+  });
+
+  it("rejects unknown ids, raw paths and malformed bodies without running anything", async () => {
+    const calls = [];
+    const { server } = await boot({ runCommand: async (...args) => { calls.push(args); return { status: 0, stdout: "", stderr: "" }; } });
+    for (const body of [{}, { ids: [] }, { ids: ["../../etc"] }, { ids: ["/"] }, { ids: ["rm -rf /"] }, { ids: "npm" }, { ids: [1] }, { ids: ["__proto__"] }, { ids: ["npm", "nope"] }, { ids: Array.from({ length: 20 }, () => "npm") }]) {
+      assert.equal((await post(server, "/api/disk/clean", body)).status, 400, JSON.stringify(body));
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("marks low-disk Docker failures so the UI can offer cleanup, and needs token/origin", async () => {
+    const { server } = await boot();
+    assert.equal((await post(server, "/api/disk/clean", { ids: ["npm"] }, { headers: {} })).status, 403);
+    assert.equal((await raw(server, { path: "/api/disk", auth: false })).status, 403);
+  });
+
+  it("restart refusal on a full disk is flagged lowDisk", async () => {
+    const result = await restartDockerDesktop({ platform: "darwin", free: () => 1, run: async () => ({ status: 0 }) });
+    assert.equal(result.lowDisk, true);
+  });
+});
+
 describe("probeCli edge cases", () => {
   const run = (impl) => probeCli(async (_project, args) => impl(args));
   it("handles an execute that throws", async () => {

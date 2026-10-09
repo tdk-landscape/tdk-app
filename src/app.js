@@ -195,6 +195,21 @@ function allowedParent(parent) {
   }
 }
 
+// Space cleanup candidates. Only regenerable caches and unused Docker data: never Downloads, Trash or project files.
+export function cleanupCandidates(home = homedir()) {
+  const emptyDir = (path) => ({ binary: "find", args: [path, "-mindepth", "1", "-maxdepth", "1", "-exec", "rm", "-rf", "{}", "+"] });
+  return [
+    { id: "app-caches", label: "Application caches", note: "~/Library/Caches. Apps rebuild these as needed.", path: join(home, "Library", "Caches"), run: emptyDir(join(home, "Library", "Caches")) },
+    { id: "logs", label: "Log files", note: "~/Library/Logs", path: join(home, "Library", "Logs"), run: emptyDir(join(home, "Library", "Logs")) },
+    { id: "npm", label: "npm cache", note: "Re-downloaded on the next install.", path: join(home, ".npm"), run: { binary: "npm", args: ["cache", "clean", "--force"] } },
+    { id: "bun", label: "Bun cache", note: "Re-downloaded on the next install.", path: join(home, ".bun", "install", "cache"), run: { binary: "bun", args: ["pm", "cache", "rm"] } },
+    { id: "pnpm", label: "pnpm store (unreferenced packages)", note: "pnpm store prune", path: join(home, "Library", "pnpm"), run: { binary: "pnpm", args: ["store", "prune"] } },
+    { id: "dot-cache", label: "~/.cache", note: "Tool caches such as pip and Hugging Face.", path: join(home, ".cache"), run: emptyDir(join(home, ".cache")) },
+    { id: "brew", label: "Homebrew downloads", note: "brew cleanup -s", path: join(home, "Library", "Caches", "Homebrew"), run: { binary: "brew", args: ["cleanup", "-s"] } },
+    { id: "docker", label: "Unused Docker images and build cache", note: "docker system prune -af (keeps volumes). Needs Docker to be running.", path: null, requiresDocker: true, run: { binary: "docker", args: ["system", "prune", "-af"] } },
+  ];
+}
+
 // CLI-supplied names are passed as argv; a leading "-" would be parsed as a flag.
 const isArgName = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && !value.startsWith("-") && !value.includes("\0");
 
@@ -379,7 +394,7 @@ function freeGb(path = homedir()) {
 export async function restartDockerDesktop({ check = checkDocker, run = (command, args) => runTdk({ root: homedir() }, args, { binary: command, timeoutMs: 20_000 }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitMs = 240_000, platform = process.platform, free = freeGb } = {}) {
   if (platform !== "darwin") return { ok: false, message: "Restarting Docker automatically is only supported on macOS. Restart Docker manually." };
   const gb = free();
-  if (gb < 2) return { ok: false, message: `Only ${gb.toFixed(1)} GB of disk is free, so Docker cannot start. Free at least 5 GB, then try again.` };
+  if (gb < 2) return { ok: false, lowDisk: true, message: `Only ${gb.toFixed(1)} GB of disk is free, so Docker cannot start. Free at least 5 GB, then try again.` };
   await run("osascript", ["-e", 'tell application "Docker" to quit']);
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const running = await run("pgrep", ["-f", "Docker Desktop"]);
@@ -567,13 +582,41 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         // `tdk down` has no scope, so stop and restart act on the whole project.
         if (scoped && body.operation !== "start") return sendJson(response, 400, { error: "TDK can only stop or restart a whole project. Start accepts a stack or resources." });
         const dockerOk = await Promise.resolve(dockerCheck()).catch(() => false);
-        if (!dockerOk) return sendJson(response, 503, { error: `${DOCKER_UNAVAILABLE}${lowDiskNote()}`, code: "docker_unavailable" });
+        if (!dockerOk) return sendJson(response, 503, { error: `${DOCKER_UNAVAILABLE}${lowDiskNote()}`, code: "docker_unavailable", lowDisk: lowDiskNote() !== "" });
         const up = ["up", "--json"];
         if (hasStack) up.push(body.stack);
         if (body.resources?.length) up.push("--only", ...body.resources);
         if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
         const result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
+      }
+      if (url.pathname === "/api/disk" && request.method === "GET") {
+        const gb = freeGb();
+        const dockerUp = await Promise.resolve(dockerCheck()).catch(() => false);
+        const items = await Promise.all(cleanupCandidates().map(async (item) => {
+          let sizeMb = null;
+          if (item.path && existsSync(item.path)) {
+            const sized = await runCommand({ root: homedir() }, ["-sk", item.path], { binary: "du", timeoutMs: 30_000 });
+            const kb = Number.parseInt(String(sized.stdout ?? "").split(/\s/)[0], 10);
+            if (sized.status === 0 && Number.isFinite(kb)) sizeMb = Math.round(kb / 1024);
+          }
+          return { id: item.id, label: item.label, note: item.note, sizeMb, available: item.requiresDocker ? dockerUp : item.path ? existsSync(item.path) : true, requiresDocker: Boolean(item.requiresDocker) };
+        }));
+        return sendJson(response, 200, { freeGb: Number.isFinite(gb) ? Number(gb.toFixed(1)) : null, dockerResponding: dockerUp, items });
+      }
+      if (url.pathname === "/api/disk/clean" && request.method === "POST") {
+        const body = await readBody(request);
+        const known = new Map(cleanupCandidates().map((item) => [item.id, item]));
+        if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > known.size || !body.ids.every((id) => typeof id === "string" && known.has(id))) return sendJson(response, 400, { error: "Choose what to clean." });
+        const before = freeGb();
+        const results = [];
+        for (const id of [...new Set(body.ids)]) {
+          const item = known.get(id);
+          const result = await runCommand({ root: homedir() }, item.run.args, { binary: item.run.binary, timeoutMs: 600_000 });
+          results.push({ id, label: item.label, ok: result.status === 0, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-300) });
+        }
+        const after = freeGb();
+        return sendJson(response, 200, { results, freedGb: Number.isFinite(before) && Number.isFinite(after) ? Number(Math.max(0, after - before).toFixed(1)) : null, freeGb: Number.isFinite(after) ? Number(after.toFixed(1)) : null });
       }
       if (url.pathname === "/api/meta" && request.method === "GET") {
         const home = homedir();

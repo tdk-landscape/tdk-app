@@ -502,6 +502,7 @@
       .checks label { display: flex; align-items: center; gap: 8px; font-weight: 400; color: var(--label); font-size: 14px; }
       .form-error { padding: 10px 12px; border-radius: 10px; background: var(--red-wash); color: var(--label); font-size: 13px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line)); }
       .form-output { margin: 0; padding: 10px 12px; max-height: 200px; overflow: auto; border-radius: 10px; background: var(--surface-alt); color: var(--label); font: 12px/1.5 var(--mono); white-space: pre-wrap; }
+      .form-note { margin: 0; padding: 10px 12px; border-radius: 6px; background: var(--surface-alt); color: var(--secondary); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-x: auto; }
       .form-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); }
       .head-actions, .panel-right .button { display: inline-flex; gap: 8px; }
       .panel-right { display: inline-flex; align-items: center; gap: 8px; }
@@ -569,6 +570,21 @@
       .legend .pass { background: #30d158; } .legend .warning { background: #ff9f0a; } .legend .fail { background: #ff453a; }
       .doctor-summary { align-items: center; }
       .doctor-meta { gap: 8px; }
+
+      /* Tighter, more Mac-like corner radii (loaded last) */
+      .project-row, .native .project-row, .stack, .native .stack, .doctor-box, .native .doctor-box, .notice, .native .notice, .conflicts, .native .conflicts, .empty, .native .empty, .modal, .native .modal { border-radius: 10px; }
+      .gauge, .native .gauge { border-radius: 12px; }
+      .skel-row { border-radius: 10px; } .skel-title, .skel-sub, .skel-side i { border-radius: 6px; }
+      .button, .native .button { border-radius: 6px; }
+      .row-actions { border-radius: 6px; } .row-actions .button:first-child { border-radius: 6px 0 0 6px; } .row-actions .button:last-child { border-radius: 0 6px 6px 0; }
+      .search input, .native .search input, .field input[type="text"], .field input[type="number"], .field select, .checks, .form-error, .form-output, .form-note { border-radius: 6px; }
+      .nav-item, .project-item, .native .nav-item.active, .native .project-item.active { border-radius: 6px; }
+      .project-symbol, .native .project-symbol { border-radius: 7px; } .brand-mark, .native .brand-mark { border-radius: 7px; }
+      .doctor-item, .native .doctor-item, .port-chip, .stack-quick .button { border-radius: 6px; }
+      .bar, .bar i:first-child, .bar i:last-child, .bar i:only-child { border-radius: 3px; } .bar i { border-radius: 2px; }
+      .notice { white-space: pre-line; }
+      .checks label small { display: block; font-size: 12px; color: var(--tertiary); }
+      .checks label.disabled { opacity: .5; }
     </style>
   </head>
   <body>
