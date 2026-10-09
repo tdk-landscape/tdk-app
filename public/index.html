@@ -211,7 +211,7 @@
       :root {
         color-scheme: light dark;
         --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-        --serif: "Tiempos Text", "Iowan Old Style", "New York", ui-serif, Georgia, "Times New Roman", serif;
+        --serif: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
         --mono: ui-monospace, "SF Mono", Menlo, monospace;
         font-family: var(--sans);
         font-size: 15px;
@@ -238,8 +238,8 @@
       /* Sidebar: plain, Codex-like list */
       .sidebar { background: var(--sidebar); border-right: 1px solid var(--line); }
       .brand { border-bottom: 0; padding: 30px 18px 0; height: 76px; }
-      .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff; font: 600 15px var(--serif); }
-      .brand-name { font: 600 17px var(--serif); letter-spacing: 0; }
+      .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); color: #fff; font: 700 15px var(--sans); }
+      .brand-name { font: 600 16px var(--sans); letter-spacing: -.01em; }
       .sidebar-tools { padding: 14px 12px 8px; }
       .search input { height: 36px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 14px; padding-left: 32px; }
       .search input::placeholder { color: var(--tertiary); }
@@ -260,10 +260,10 @@
       .content { padding: 44px clamp(24px, 5vw, 64px) 56px; }
       .content-inner { max-width: 920px; }
       .page-head { margin: 0 0 26px; align-items: flex-end; }
-      .page-head h1, .detail-title h1 { font: 500 34px/1.15 var(--serif); letter-spacing: -.01em; }
-      .page-head p { font: 400 16px/1.5 var(--serif); color: var(--secondary); max-width: 560px; }
+      .page-head h1, .detail-title h1 { font: 600 30px/1.2 var(--serif); letter-spacing: -.02em; }
+      .page-head p { font: 400 15px/1.5 var(--sans); color: var(--secondary); max-width: 560px; }
       .stat { padding-left: 16px; }
-      .stat strong { font: 500 26px var(--serif); letter-spacing: 0; }
+      .stat strong { font: 600 24px var(--sans); letter-spacing: -.02em; }
       .stat span { font-size: 13px; color: var(--secondary); }
       .list-head, .section-label { font: 600 13px var(--sans); letter-spacing: 0; text-transform: none; color: var(--secondary); padding: 0 12px 8px; }
       .section-label { padding: 0; margin: 28px 0 10px; }
@@ -283,10 +283,10 @@
       .project-table { gap: 10px; }
       .project-row { grid-template-columns: minmax(220px, 1.6fr) 120px minmax(120px, .8fr) auto; gap: 18px; min-height: 76px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: none; }
       .project-row:hover { background: var(--surface); border-color: var(--tertiary); border-radius: 12px; }
-      .project-symbol { width: 34px; height: 34px; flex: 0 0 34px; border: 0; border-radius: 9px; background: var(--accent-wash); color: var(--accent); font: 600 16px var(--serif); }
+      .project-symbol { width: 34px; height: 34px; flex: 0 0 34px; border: 0; border-radius: 9px; background: var(--accent-wash); color: var(--accent); font: 600 16px var(--sans); }
       .project-open .project-symbol { width: 38px; height: 38px; flex-basis: 38px; }
       .row-title { gap: 4px; }
-      .row-title strong { font: 500 18px var(--serif); }
+      .row-title strong { font: 600 16px var(--sans); letter-spacing: -.01em; }
       .row-title small { font: 12px var(--mono); color: var(--tertiary); }
       .status-label { font-size: 14px; color: var(--label); gap: 8px; }
       .state-dot { width: 9px; height: 9px; flex-basis: 9px; }
@@ -302,7 +302,7 @@
       .conflict-body { font-size: 13px; padding: 0 14px 12px; }
       .stack { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: none; }
       .stack-head { min-height: 52px; padding: 8px 12px 8px 16px; }
-      .stack-name { font: 500 17px var(--serif); }
+      .stack-name { font: 600 15px var(--sans); }
       .stack-count { font-size: 13px; color: var(--secondary); }
       .chevron { width: 14px; height: 14px; color: var(--secondary); }
       .stack-quick .button, .resource-actions .button { min-height: 32px; padding: 0 12px; font-size: 13px; border-color: var(--line); background: var(--surface); color: var(--label); }
@@ -322,11 +322,11 @@
       .cli-banner a { color: var(--accent); font-weight: 500; }
       .update-result { font: 12px/1.5 var(--mono); }
       .empty { border-radius: 12px; color: var(--secondary); }
-      .empty strong { font: 500 20px var(--serif); }
+      .empty strong { font: 600 18px var(--sans); }
       .empty p { font-size: 14px; }
       .loading { font-size: 14px; }
       .modal { border-radius: 12px; }
-      .modal-head h2 { font: 500 17px var(--serif); }
+      .modal-head h2 { font: 600 15px var(--sans); }
       .modal pre { font: 13px/1.6 var(--mono); color: var(--label); }
       @media (max-width: 840px) { .project-row { grid-template-columns: minmax(180px, 1fr) 110px auto; } }
     </style>
