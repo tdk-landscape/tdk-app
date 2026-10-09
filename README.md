@@ -22,6 +22,17 @@ TDK App automatically searches common development locations, including `/var/www
 
 The server binds only to `127.0.0.1`, protects the browser session with a random in-memory token, and exits with the app process. Closing the dashboard does not stop project resources. The terminal dashboard `tdk ui` remains available independently.
 
+## macOS app
+
+A lightweight native app (about 200 KB, a WKWebView shell, no Electron) that runs the same server in its own window:
+
+```sh
+./macos/build.sh
+open "dist/TDK App.app"
+```
+
+Requires Xcode Command Line Tools to build and Node.js 22.12+ on your login-shell `PATH` to run. The app starts the server with `--no-open` and stops it when you quit.
+
 ## Install as a command
 
 After a package release, install the published package globally and run:
