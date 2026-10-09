@@ -115,9 +115,9 @@ function renderOverview() {
   content.innerHTML = `<div class="content-inner">
     <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p></div>
       </div>
-    <div class="gauges">${overviewGauges(ready, resources)}</div>
+    ${collapsible("summary", "Summary", `<div class="gauges">${overviewGauges(ready, resources)}</div>`)}
     <div id="notice" class="notice" role="status"></div>
-    ${visible.length ? `<div class="list-head"><span>Workspace</span><span>${visible.length} shown</span></div><section class="project-table" aria-label="TDK projects">${rows}</section>` : `<div class="empty"><span class="empty-icon">⌕</span><strong>${projects.length ? "No matching projects" : "No TDK projects found"}</strong><p>${projects.length ? "Try another project name or folder path." : "TDK App searches common development folders. Add a location with --scan-root or initialize a project with tdk project."}</p></div>`}
+    ${visible.length ? collapsible("projects", "Projects", `<section class="project-table" aria-label="TDK projects">${rows}</section>`, `${visible.length} shown`) : `<div class="empty"><span class="empty-icon">⌕</span><strong>${projects.length ? "No matching projects" : "No TDK projects found"}</strong><p>${projects.length ? "Try another project name or folder path." : "TDK App searches common development folders. Add a location with --scan-root or initialize a project with tdk project."}</p></div>`}
   </div>`;
 }
 
@@ -159,9 +159,17 @@ function renderDetail(project) {
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
-    <div class="section-label"><span>Stacks & resources</span><span>${resources.length} total</span></div>
-    <div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>
+    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total`)}
   </div>`;
+}
+
+// Collapsed sections persist across launches (best effort; storage can be unavailable).
+const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem("tdk-collapsed") || "[]"); } catch { return []; } })());
+function saveCollapsed() { try { localStorage.setItem("tdk-collapsed", JSON.stringify([...collapsed])); } catch {} }
+
+function collapsible(id, title, body, right = "") {
+  const shut = collapsed.has(id);
+  return `<section class="panel ${shut ? "collapsed" : ""}" data-panel="${esc(id)}"><div class="panel-head"><button class="panel-toggle" type="button" aria-expanded="${!shut}">${chevronMarkup()}<span>${esc(title)}</span></button><span class="panel-right">${right}</span></div><div class="panel-body">${body}</div></section>`;
 }
 
 function chevronMarkup() {
@@ -200,8 +208,7 @@ function ringMarkup({ value, text, label = "", size = 44, stroke = 5, cls = scor
   const filled = value == null ? 0 : Math.max(0, Math.min(100, value)) / 100 * circumference;
   const fontSize = Math.round(size * (size >= 80 ? 0.26 : 0.34));
   return `<span class="ring ${cls}" style="width:${size}px;height:${size}px" ${title ? `title="${esc(title)}"` : ""} role="img" aria-label="${esc(label || text)}">
-    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><circle class="ring-track" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}"/><circle class="ring-fill" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${size / 2} ${size / 2})"/></svg>
-    <b style="font-size:${fontSize}px">${esc(text)}</b></span>`;
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><circle class="ring-track" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}"/><circle class="ring-fill" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${size / 2} ${size / 2})"/><text x="${size / 2}" y="${size / 2}" dy=".35em" text-anchor="middle" font-size="${fontSize}">${esc(text)}</text></svg></span>`;
 }
 
 function scoreMarkup(project, size = 44) {
@@ -242,12 +249,12 @@ async function loadDoctors(force = false) {
 
 function doctorSection(project) {
   const result = doctors.get(project.id);
-  const head = `<div class="section-label"><span>Doctor</span><button class="button" type="button" data-action="doctor-refresh" data-project="${esc(project.id)}">Run again</button></div>`;
-  if (!result) return `${head}<div class="doctor-box">Running tdk doctor…</div>`;
-  if (result.error) return `${head}<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`;
+  const rerun = `<button class="button" type="button" data-action="doctor-refresh" data-project="${esc(project.id)}">Run again</button>`;
+  if (!result) return collapsible("doctor", "Doctor", `<div class="doctor-box">Running tdk doctor…</div>`, rerun);
+  if (result.error) return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`, rerun);
   const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
   const list = issues.length ? issues.map((check) => `<div class="doctor-item ${check.status}"><strong>${esc(check.name)}</strong><span>${esc(check.message)}</span>${check.fix ? `<code>${esc(check.fix)}</code>` : ""}</div>`).join("") : `<div class="doctor-item pass"><strong>All ${result.total} checks passed</strong></div>`;
-  return `${head}<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong><span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span>${stackedBar(result)}</div></div>${list}</div>`;
+  return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong><span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span>${stackedBar(result)}</div></div>${list}</div>`, rerun);
 }
 
 const updateState = { running: false, message: "" };
@@ -441,6 +448,15 @@ content.addEventListener("click", (event) => {
 });
 
 content.addEventListener("click", (event) => {
+  const panelToggle = event.target.closest(".panel-toggle");
+  if (panelToggle) {
+    const panel = panelToggle.closest(".panel");
+    const shut = panel.classList.toggle("collapsed");
+    panelToggle.setAttribute("aria-expanded", String(!shut));
+    if (shut) collapsed.add(panel.dataset.panel); else collapsed.delete(panel.dataset.panel);
+    saveCollapsed();
+    return;
+  }
   const toggle = event.target.closest(".stack-toggle");
   if (!toggle) return;
   const stack = toggle.closest(".stack");
@@ -463,3 +479,22 @@ document.querySelector("#refresh").addEventListener("click", refreshData);
 document.querySelector("#close-logs").addEventListener("click", () => document.querySelector("#logs").close());
 refreshData();
 setInterval(refreshData, 7000);
+
+// Sidebar: collapse the whole sidebar (button or Cmd+B) and the Workspaces list.
+const appShell = document.querySelector(".app");
+function applySidebarState() {
+  appShell.classList.toggle("side-hidden", collapsed.has("side"));
+  document.querySelector(".sidebar").classList.toggle("ws-collapsed", collapsed.has("ws"));
+  document.querySelector("#ws-toggle")?.setAttribute("aria-expanded", String(!collapsed.has("ws")));
+}
+function toggleKey(key) {
+  if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+  saveCollapsed();
+  applySidebarState();
+}
+document.querySelector("#side-toggle").addEventListener("click", () => toggleKey("side"));
+document.querySelector("#ws-toggle").addEventListener("click", () => toggleKey("ws"));
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleKey("side"); }
+});
+applySidebarState();
