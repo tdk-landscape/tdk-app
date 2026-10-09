@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { discoverProjectRoot, resolveProjects, startAppServer } from "../src/app.js";
+import { commonProjectScanRoots, discoverProjectRoot, discoverProjects, resolveProjects, startAppServer } from "../src/app.js";
 
 const servers = [];
 const tempDirs = [];
@@ -39,6 +39,21 @@ describe("TDK App local server", () => {
     assert.equal(discoverProjectRoot(nested), root);
     assert.equal(resolveProjects(root, [root]).length, 1);
     assert.throws(() => resolveProjects(null, [join(root, "missing")]), /Not a TDK project directory/);
+  });
+
+  it("finds projects below scan roots and skips dependency folders", () => {
+    const root = mkdtempSync(join(tmpdir(), "tdk-app-scan-"));
+    tempDirs.push(root);
+    const project = join(root, "workspace", "project");
+    mkdirSync(join(project, ".tdk"), { recursive: true });
+    writeFileSync(join(project, ".tdk", "project.json"), JSON.stringify({ project: { name: "workspace-project" } }));
+    const ignored = join(root, "node_modules", "example");
+    mkdirSync(join(ignored, ".tdk"), { recursive: true });
+    writeFileSync(join(ignored, ".tdk", "project.json"), JSON.stringify({ project: { name: "ignored" } }));
+
+    const projects = discoverProjects({ currentRoot: null, scanRoots: [root] });
+    assert.deepEqual(projects.map((entry) => entry.root), [project]);
+    assert(commonProjectScanRoots("/Users/example").includes("/var/www"));
   });
 
   it("returns project status and port conflicts from CLI JSON", async () => {

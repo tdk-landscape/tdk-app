@@ -11,10 +11,14 @@ Requires Node.js 22.12 or newer and TDK CLI on `PATH`.
 ```sh
 npm start
 npm start -- --project ~/src/storefront --project ~/src/billing
+npm start -- --scan-root ~/workspaces
+npm start -- --no-scan --project ~/src/storefront
 npm start -- --port 43120
 ```
 
-TDK App includes the project containing the current directory. Additional project roots are explicit and must contain `.tdk/project.json`. `--port 0` (the default) selects an available local port.
+TDK App automatically searches common development locations, including `/var/www`, `~/ollama`, `~/Codex`, `~/Documents/Codex`, `~/GitHub`, `~/Documents/GitHub`, `~/src`, `~/Projects`, and `~/Developer`. It also includes the project containing the current directory. Scans are bounded to eight directory levels and skip dependency, build, and version-control folders. Use repeatable `--scan-root` options to add locations, `--project` to add a specific project root, or `--no-scan` to disable the common-location scan. Every selected project must contain `.tdk/project.json`.
+
+`--port 0` (the default) selects an available local port.
 
 The server binds only to `127.0.0.1`, protects the browser session with a random in-memory token, and exits with the app process. Closing the dashboard does not stop project resources. The terminal dashboard `tdk ui` remains available independently.
 

@@ -1,14 +1,20 @@
 #!/usr/bin/env node
-import { discoverProjectRoot, openBrowser, resolveProjects, startAppServer } from "./app.js";
+import { commonProjectScanRoots, discoverProjectRoot, discoverProjects, openBrowser, startAppServer } from "./app.js";
 
 function parseArgs(args) {
-  const options = { projects: [], port: 0 };
+  const options = { projects: [], scanRoots: [], port: 0, scan: true };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--project") {
       const value = args[++index];
       if (!value) throw new Error("--project requires a directory path.");
       options.projects.push(value);
+    } else if (arg === "--scan-root") {
+      const value = args[++index];
+      if (!value) throw new Error("--scan-root requires a directory path.");
+      options.scanRoots.push(value);
+    } else if (arg === "--no-scan") {
+      options.scan = false;
     } else if (arg === "--port") {
       const value = Number(args[++index]);
       if (!Number.isInteger(value) || value < 0 || value > 65535) throw new Error("--port must be an integer from 0 to 65535.");
@@ -23,13 +29,18 @@ function parseArgs(args) {
 try {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log("Usage: tdk-app [--project <path> ...] [--port <port>]");
+    console.log("Usage: tdk-app [--project <path> ...] [--scan-root <path> ...] [--no-scan] [--port <port>]");
     process.exit(0);
   }
-  const projects = resolveProjects(discoverProjectRoot(), options.projects);
+  const projects = discoverProjects({
+    currentRoot: discoverProjectRoot(),
+    projectRoots: options.projects,
+    scanRoots: [...(options.scan ? commonProjectScanRoots() : []), ...options.scanRoots],
+  });
   const { server, url } = await startAppServer({ projects, port: options.port });
   openBrowser(url).catch(() => {});
   console.log(`TDK App is running at ${url}`);
+  console.log(`Found ${projects.length} TDK project${projects.length === 1 ? "" : "s"}.`);
   console.log("Press Ctrl+C to close the local command center.");
   const shutdown = () => server.close(() => process.exit(0));
   process.once("SIGINT", shutdown);

@@ -1,12 +1,20 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 
 const PROJECT_FILE = join(".tdk", "project.json");
 const PORT_FILE = join(".tdk", ".tdk-out", "tilt-port.json");
 const MAX_BODY = 16 * 1024;
+const MAX_SCAN_DEPTH = 8;
+const MAX_DIRECTORIES_PER_ROOT = 25_000;
+const MAX_DISCOVERED_PROJECTS = 500;
+const SCAN_SKIP_NAMES = new Set([
+  ".git", ".hg", ".svn", "node_modules", "vendor", "target", "dist", "build",
+  ".cache", ".npm", ".bun", ".venv", "venv", ".tox", "Pods", "DerivedData",
+]);
 const HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
 const CLIENT_SCRIPT = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
@@ -41,6 +49,75 @@ export function resolveProjects(currentRoot, additionalRoots = []) {
       root,
     };
   });
+}
+
+export function commonProjectScanRoots(home = homedir()) {
+  return [
+    join(home, "ollama"),
+    join(home, "Ollama"),
+    "/var/www",
+    join(home, "Codex"),
+    join(home, "Documents", "Codex"),
+    join(home, "GitHub"),
+    join(home, "github"),
+    join(home, "Documents", "GitHub"),
+    join(home, "Documents", "github"),
+    join(home, "src"),
+    join(home, "Code"),
+    join(home, "code"),
+    join(home, "Projects"),
+    join(home, "projects"),
+    join(home, "Developer"),
+    join(home, "dev"),
+    join(home, "work"),
+    join(home, "Work"),
+    join(home, "workspace"),
+    join(home, "Workspaces"),
+    join(home, "Documents", "Projects"),
+    join(home, "Documents", "Workspaces"),
+  ];
+}
+
+export function discoverProjects({
+  currentRoot = discoverProjectRoot(),
+  projectRoots = [],
+  scanRoots = commonProjectScanRoots(),
+  maxDepth = MAX_SCAN_DEPTH,
+  maxDirectoriesPerRoot = MAX_DIRECTORIES_PER_ROOT,
+  maxProjects = MAX_DISCOVERED_PROJECTS,
+} = {}) {
+  const discovered = new Set(projectRoots.map((root) => resolve(root)));
+  if (currentRoot) discovered.add(resolve(currentRoot));
+
+  for (const scanRoot of [...new Set(scanRoots.map((root) => resolve(root)))]) {
+    if (!existsSync(scanRoot)) continue;
+    const queue = [{ path: scanRoot, depth: 0 }];
+    let visited = 0;
+    while (queue.length && visited < maxDirectoriesPerRoot && discovered.size < maxProjects) {
+      const current = queue.pop();
+      visited += 1;
+      if (existsSync(join(current.path, PROJECT_FILE))) {
+        discovered.add(current.path);
+        continue;
+      }
+      if (current.depth >= maxDepth) continue;
+      let entries;
+      try {
+        entries = readdirSync(current.path, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || SCAN_SKIP_NAMES.has(entry.name)) continue;
+        if (entry.name.startsWith(".") && entry.name !== ".tdk") continue;
+        queue.push({ path: join(current.path, entry.name), depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return resolveProjects(null, [...discovered]).sort((left, right) =>
+    left.name.localeCompare(right.name) || left.root.localeCompare(right.root),
+  );
 }
 
 function sameSecret(left, right) {
