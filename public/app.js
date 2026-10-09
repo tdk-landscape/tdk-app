@@ -5,6 +5,7 @@ const search = document.querySelector("#search");
 let projects = [];
 let selectedProjectId = null;
 let searchTerm = "";
+let cli = null;
 
 history.replaceState(null, "", location.pathname);
 
@@ -156,10 +157,27 @@ function render() {
   const selected = projects.find((project) => project.id === selectedProjectId);
   if (selected) renderDetail(selected);
   else renderOverview();
+  applyCliCapability();
+}
+
+function applyCliCapability() {
+  if (!cli || cli.lifecycle) return;
+  for (const button of document.querySelectorAll('[data-action="start"], [data-action="stop"], [data-action="restart"]')) {
+    button.disabled = true;
+    button.title = "Not available with this TDK CLI version.";
+  }
+  const banner = document.createElement("div");
+  banner.className = "notice show error cli-banner";
+  banner.setAttribute("role", "alert");
+  const link = cli.installUrl ? ` <a href="${esc(cli.installUrl)}" target="_blank" rel="noreferrer noopener">Install or update instructions</a>` : "";
+  banner.innerHTML = `${esc(cli.message)}${link}`;
+  const inner = content.querySelector(".content-inner") || content;
+  inner.prepend(banner);
 }
 
 async function refreshData() {
   try {
+    cli = await api("/api/cli").catch(() => null);
     const response = await api("/api/projects");
     projects = response.projects || [];
     if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) selectedProjectId = null;
