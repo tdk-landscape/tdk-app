@@ -28,6 +28,12 @@ function parseArgs(args) {
   return options;
 }
 
+// A stray rejection or EPIPE (e.g. the app window closing) must not take the server down.
+process.on("unhandledRejection", (error) => console.error("Unhandled rejection:", error));
+process.on("uncaughtException", (error) => console.error("Uncaught exception:", error));
+process.stdout.on("error", () => {});
+process.stderr.on("error", () => {});
+
 try {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {

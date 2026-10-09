@@ -135,29 +135,51 @@ function sendJson(response, status, data) {
   response.end(JSON.stringify(data));
 }
 
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function readBody(request) {
   let body = "";
   for await (const chunk of request) {
     body += chunk.toString();
-    if (body.length > MAX_BODY) throw new Error("Request body is too large.");
+    if (body.length > MAX_BODY) {
+      request.destroy();
+      throw new HttpError(413, "Request body is too large.");
+    }
   }
   if (!body) return {};
-  const value = JSON.parse(body);
+  let value;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    throw new HttpError(400, "Request body is not valid JSON.");
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a JSON object.");
+    throw new HttpError(400, "Expected a JSON object.");
   }
   return value;
 }
+
+// CLI-supplied names are passed as argv; a leading "-" would be parsed as a flag.
+const isArgName = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && !value.startsWith("-") && !value.includes("\0");
 
 function readMachine(result) {
   let envelope;
   try {
     envelope = JSON.parse(result.stdout);
   } catch {
-    throw new Error(result.stderr.trim() || `TDK returned invalid JSON (exit ${result.status ?? 1}).`);
+    envelope = null;
   }
-  if ((result.status !== 0 || envelope.errors?.length) && envelope.data == null) {
-    throw new Error(envelope.errors?.map((error) => error.message).filter(Boolean).join("\n") || result.stderr.trim() || "TDK command failed.");
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+    throw new Error(String(result.stderr ?? "").trim() || (result.status == null ? "TDK did not respond (timed out or could not start)." : `TDK returned invalid JSON (exit ${result.status}).`));
+  }
+  const errors = Array.isArray(envelope.errors) ? envelope.errors : [];
+  if ((result.status !== 0 || errors.length) && envelope.data == null) {
+    throw new Error(errors.map((error) => error?.message).filter((message) => typeof message === "string" && message).join("\n") || String(result.stderr ?? "").trim() || "TDK command failed.");
   }
   if (envelope.data == null) throw new Error("TDK returned no data.");
   return envelope.data;
@@ -186,21 +208,26 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
       clearTimeout(timer);
       resolvePromise({ status, stdout, stderr });
     };
-    const timer = setTimeout(() => {
+    const stop = () => {
       child.kill("SIGTERM");
+      // A CLI that ignores SIGTERM must not outlive the request.
+      setTimeout(() => child.kill("SIGKILL"), 2000).unref();
+    };
+    const timer = setTimeout(() => {
+      stop();
       finish(null);
     }, timeoutMs);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
       if (stdout.length > 2_000_000) {
-        child.kill("SIGTERM");
+        stop();
         finish(null);
       }
     });
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString();
       if (stderr.length > 2_000_000) {
-        child.kill("SIGTERM");
+        stop();
         finish(null);
       }
     });
@@ -212,6 +239,7 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
   });
 }
 
+export const MANUAL_UPDATE_COMMAND = "curl -fsSL https://tdk-landscape.github.io/install.sh | sh";
 export const MIN_CLI_VERSION = "1.3.145";
 const INSTALL_URL = "https://github.com/tdk-landscape/tdk-cli-core#install";
 const LIFECYCLE_COMMANDS = ["start", "stop", "restart"];
@@ -256,16 +284,18 @@ async function projectStatus(project, execute) {
   try {
     services = readMachine(await execute(project, ["networks", "--json"])).services ?? [];
   } catch {}
-  const urls = new Map(services.map((service) => [service.name, service.url]));
+  if (!status || typeof status !== "object" || Array.isArray(status)) throw new Error("TDK returned an unexpected status format.");
+  const objects = (value) => (Array.isArray(value) ? value.filter((item) => item && typeof item === "object" && !Array.isArray(item)) : []);
+  const urls = new Map(objects(services).map((service) => [service.name, service.url]));
   return {
     project,
-    resources: (status.resources ?? []).map((resource) => ({
+    resources: objects(status.resources).map((resource) => ({
       ...resource,
       url: safeUrl(urls.get(resource.name) ?? resource.url),
     })),
-    stacks: status.stacks ?? [],
-    ports: status.ports ?? [],
-    tiltRunning: Boolean(status.tilt?.resources),
+    stacks: objects(status.stacks),
+    ports: objects(status.ports),
+    tiltRunning: Boolean(status.tilt && typeof status.tilt === "object" && status.tilt.resources),
   };
 }
 
@@ -294,6 +324,7 @@ function findConflicts(snapshots) {
 export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
+  let updating = false;
   // Cache only a positive result so installing or updating the CLI is picked up on the next load.
   const cliCapability = async () => {
     if (capability?.lifecycle) return capability;
@@ -338,8 +369,25 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
       if (url.pathname === "/api/cli" && request.method === "GET") {
         return sendJson(response, 200, await cliCapability());
       }
+      if (url.pathname === "/api/cli/update" && request.method === "POST") {
+        // Runs the CLI's own `tdk upgrade`; never elevates privileges. On failure the client shows the manual command.
+        if (updating) return sendJson(response, 409, { error: "An update is already running." });
+        updating = true;
+        try {
+          const result = await runCommand({ root: homedir() }, ["upgrade", "--yes"], { timeoutMs: 300_000 });
+          capability = null;
+          const cli = await cliCapability();
+          return sendJson(response, 200, { ok: result.status === 0, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-2000), cli });
+        } finally {
+          updating = false;
+        }
+      }
       if (url.pathname === "/api/projects" && request.method === "GET") {
-        const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand)));
+        // One broken project must not take the whole dashboard down.
+        const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand).catch((error) => ({
+          project, resources: [], stacks: [], ports: [], tiltRunning: false,
+          error: error instanceof Error ? error.message : String(error),
+        }))));
         const conflicts = findConflicts(snapshots);
         return sendJson(response, 200, {
           projects: snapshots.map((snapshot) => ({
@@ -347,6 +395,7 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
             name: snapshot.project.name,
             path: snapshot.project.root,
             tiltRunning: snapshot.tiltRunning,
+            ...(snapshot.error ? { error: snapshot.error } : {}),
             resources: snapshot.resources,
             stacks: snapshot.stacks,
             ports: snapshot.ports.map((port) => ({ name: port.name, port: port.hostPort })),
@@ -360,38 +409,40 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
       if (url.pathname === "/api/logs" && request.method === "GET") {
         const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
         const resource = url.searchParams.get("resource");
-        if (!project || !resource) return sendJson(response, 400, { error: "Select a project and resource." });
+        if (!project || !isArgName(resource)) return sendJson(response, 400, { error: "Select a project and resource." });
         const result = readMachine(await runCommand(project, ["logs", "--json", "--tail", "100", "--service", resource]));
-        return sendJson(response, 200, { lines: result.lines ?? [] });
+        return sendJson(response, 200, { lines: Array.isArray(result.lines) ? result.lines : [] });
       }
       if (url.pathname === "/api/actions" && request.method === "POST") {
         const body = await readBody(request);
-        const project = projects.find((entry) => entry.id === body.project);
-        if (!project || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        if (!project || typeof body.project !== "string" || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
         const cli = await cliCapability();
         if (!cli.lifecycle) {
           return sendJson(response, 409, { error: cli.message, code: "cli_unsupported", cli: { state: cli.state, version: cli.version, minVersion: cli.minVersion, installUrl: cli.installUrl } });
         }
         const args = [body.operation, "--json"];
-        if (typeof body.stack === "string" && body.stack) args.push(body.stack);
-        if (Array.isArray(body.resources)) {
-          const names = body.resources.filter((name) => typeof name === "string" && name.length > 0);
-          if (names.length !== body.resources.length || names.length > 30) return sendJson(response, 400, { error: "Invalid resource selection." });
-          if (names.length) args.push("--only", ...names);
+        if (body.stack != null && body.stack !== "") {
+          if (!isArgName(body.stack)) return sendJson(response, 400, { error: "Invalid stack name." });
+          args.push(body.stack);
+        }
+        if (body.resources != null) {
+          if (!Array.isArray(body.resources) || body.resources.length > 30 || !body.resources.every((name) => isArgName(name))) return sendJson(response, 400, { error: "Invalid resource selection." });
+          if (body.resources.length) args.push("--only", ...body.resources);
         }
         const result = readMachine(await runCommand(project, args, { timeoutMs: 180_000 }));
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
       }
       if (url.pathname === "/api/open" && request.method === "POST") {
         const body = await readBody(request);
-        const project = projects.find((entry) => entry.id === body.project);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
         if (!project || !["project", "terminal"].includes(body.kind)) return sendJson(response, 400, { error: "Choose a valid project and open action." });
         await openPath(project.root, body.kind);
         return sendJson(response, 200, { ok: true });
       }
       return sendJson(response, 404, { error: "Not found." });
     })().catch((error) => {
-      if (!response.headersSent) sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
+      if (!response.headersSent) sendJson(response, error instanceof HttpError ? error.status : 500, { error: error instanceof Error ? error.message : String(error) });
       else response.destroy(error instanceof Error ? error : undefined);
     });
   });

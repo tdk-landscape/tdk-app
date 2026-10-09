@@ -160,6 +160,25 @@ function render() {
   applyCliCapability();
 }
 
+const updateState = { running: false, message: "" };
+const MANUAL_UPDATE = "curl -fsSL https://tdk-landscape.github.io/install.sh | sh";
+
+async function updateCli() {
+  updateState.running = true;
+  updateState.message = "";
+  render();
+  try {
+    const result = await api("/api/cli/update", { method: "POST", body: "{}" });
+    cli = result.cli || cli;
+    updateState.message = result.ok ? "TDK CLI updated." : `Update failed. Run this in a terminal instead:\n${MANUAL_UPDATE}\n\n${result.output || ""}`;
+  } catch (error) {
+    updateState.message = `Update failed: ${error.message}\nRun this in a terminal instead:\n${MANUAL_UPDATE}`;
+  } finally {
+    updateState.running = false;
+  }
+  await refreshData();
+}
+
 function applyCliCapability() {
   if (!cli || cli.lifecycle) return;
   for (const button of document.querySelectorAll('[data-action="start"], [data-action="stop"], [data-action="restart"]')) {
@@ -169,8 +188,12 @@ function applyCliCapability() {
   const banner = document.createElement("div");
   banner.className = "notice show error cli-banner";
   banner.setAttribute("role", "alert");
+  const canUpdate = cli.state === "unsupported" || cli.state === "failed";
+  const update = canUpdate ? ` <button class="button" type="button" id="update-cli" ${updateState.running ? "disabled" : ""}>${updateState.running ? "Updating…" : "Update TDK CLI"}</button>` : "";
+  const outcome = updateState.message ? `<div class="update-result">${esc(updateState.message)}</div>` : "";
   const link = cli.installUrl ? ` <a href="${esc(cli.installUrl)}" target="_blank" rel="noreferrer noopener">Install or update instructions</a>` : "";
-  banner.innerHTML = `${esc(cli.message)}${link}`;
+  banner.innerHTML = `${esc(cli.message)}${link}${update}${outcome}`;
+  banner.querySelector("#update-cli")?.addEventListener("click", updateCli);
   const inner = content.querySelector(".content-inner") || content;
   inner.prepend(banner);
 }
