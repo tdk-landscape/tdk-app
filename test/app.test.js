@@ -56,6 +56,12 @@ describe("TDK App local server", () => {
       }),
     });
     const started = await serverFor({ projects, runCommand });
+    const pageResponse = await fetch(started.url);
+    assert.equal(pageResponse.status, 200);
+    assert.match(await pageResponse.text(), /<script src="\/app\.js" defer><\/script>/);
+    const scriptResponse = await fetch(new URL("/app.js", started.url));
+    assert.equal(scriptResponse.status, 200);
+    assert.match(await scriptResponse.text(), /function refreshProjects/);
     const response = await fetch(new URL("/api/projects", started.url), {
       headers: { "x-tdk-token": started.token },
     });

@@ -8,6 +8,7 @@ const PROJECT_FILE = join(".tdk", "project.json");
 const PORT_FILE = join(".tdk", ".tdk-out", "tilt-port.json");
 const MAX_BODY = 16 * 1024;
 const HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
+const CLIENT_SCRIPT = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
 
 export function discoverProjectRoot(start = process.cwd()) {
   let directory = resolve(start);
@@ -191,9 +192,17 @@ export function startAppServer({ projects, host = "127.0.0.1", port = 0, token =
           "cache-control": "no-store",
           "referrer-policy": "no-referrer",
           "x-content-type-options": "nosniff",
-          "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+          "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
         });
         return response.end(HTML.replace("__TDK_CENTER_TOKEN__", token).replaceAll("tdk center", "tdk-app"));
+      }
+      if (url.pathname === "/app.js" && request.method === "GET") {
+        response.writeHead(200, {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        });
+        return response.end(CLIENT_SCRIPT);
       }
       if (!url.pathname.startsWith("/api/")) return sendJson(response, 404, { error: "Not found." });
       if (!sameSecret(request.headers["x-tdk-token"]?.toString() ?? "", token)) return sendJson(response, 403, { error: "Invalid session token." });
