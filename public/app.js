@@ -93,8 +93,8 @@ function renderOverview() {
     const conflicts = (project.conflicts || []).length;
     return `<div class="project-row">
       <button class="project-open" type="button" data-select-project="${esc(project.id)}">${symbolMarkup(project.name)}<span class="row-title"><strong>${esc(project.name)}</strong><small>${esc(project.path)}</small></span></button>
-      ${statusMarkup(project.tiltRunning ? "running" : "stopped")}
-      <span class="row-meta resources-count">${(project.resources || []).length} resources${conflicts ? ` · ${conflicts} port conflicts` : ""}</span>
+      ${project.error ? `<span class="status-label"><i class="state-dot error"></i>Unavailable</span>` : statusMarkup(project.tiltRunning ? "running" : "stopped")}
+      <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` · ${conflicts} port conflicts` : ""}`}</span>
       ${actionSet(project, "project", "", true)}
     </div>`;
   }).join("");
@@ -129,16 +129,17 @@ function renderDetail(project) {
       <div class="resource-name" title="${esc(resource.name)}">${esc(resource.name)}${resource.type ? `<span class="resource-type">${esc(resource.type)}</span>` : ""}</div>
       ${statusMarkup(resource.status)}
       ${resource.url ? `<a class="resource-url" href="${esc(resource.url)}" target="_blank" rel="noreferrer">${esc(resource.url)}</a>` : `<span class="resource-url">No endpoint</span>`}
-      <div class="resource-actions">${actionButton("start", project, "resource", resource.name)}${actionButton("stop", project, "resource", resource.name)}${actionButton("restart", project, "resource", resource.name)}<button class="button" type="button" data-action="logs" data-project="${esc(project.id)}" data-name="${esc(resource.name)}">Logs</button></div>
+      <div class="resource-actions">${actionButton("start", project, "resource", resource.name)}<button class="button" type="button" data-action="logs" data-project="${esc(project.id)}" data-name="${esc(resource.name)}">Logs</button></div>
     </div>`).join("") : `<div class="resource-row"><span class="resource-name">No resources assigned</span></div>`;
-    const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${actionButton("start", project, "stack", name)}${actionButton("stop", project, "stack", name)}${actionButton("restart", project, "stack", name)}</div>`;
-    return `<section class="stack" data-stack="${esc(name)}"><div class="stack-head"><button class="stack-toggle" type="button" aria-expanded="false">${chevronMarkup()}<span class="stack-name">${esc(name)}</span><span class="stack-count">${items.length} resource${items.length === 1 ? "" : "s"}</span></button>${quickActions}</div><div class="resource-list">${resourcesMarkup}</div></section>`;
+    const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${actionButton("start", project, "stack", name)}</div>`;
+    return `<section class="stack ${closedStacks.has(`${project.id}/${name}`) ? "" : "open"}" data-stack="${esc(name)}" data-key="${esc(`${project.id}/${name}`)}"><div class="stack-head"><button class="stack-toggle" type="button" aria-expanded="${!closedStacks.has(`${project.id}/${name}`)}">${chevronMarkup()}<span class="stack-name">${esc(name)}</span><span class="stack-count">${items.length} resource${items.length === 1 ? "" : "s"}</span></button>${quickActions}</div><div class="resource-list">${resourcesMarkup}</div></section>`;
   }).join("");
 
   document.querySelector("#overview-nav").classList.remove("active");
   document.querySelector("#breadcrumb").innerHTML = `<button class="back-link" type="button" data-view-overview>Projects</button><span>›</span><strong>${esc(project.name)}</strong>`;
   content.innerHTML = `<div class="content-inner">
     <div id="notice" class="notice" role="status"></div>
+    ${project.error ? `<div class="notice show error">Could not read status: ${esc(project.error)}</div>` : ""}
     <div class="detail-head"><div class="detail-title"><button class="back-link" type="button" data-view-overview>← All projects</button><h1>${esc(project.name)}</h1><code class="detail-path">${esc(project.path)}</code></div>
       <div class="detail-actions">${actionSet(project)}<button class="button" type="button" data-action="open-project" data-project="${esc(project.id)}">Open folder</button><button class="button" type="button" data-action="open-terminal" data-project="${esc(project.id)}">Open terminal</button></div></div>
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
@@ -152,12 +153,17 @@ function chevronMarkup() {
   return `<svg class="chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 
+// Stacks stay open across the 7-second refresh unless the user closed them.
+const closedStacks = new Set();
+
 function render() {
+  const scrollTop = content.scrollTop;
   renderSidebar();
   const selected = projects.find((project) => project.id === selectedProjectId);
   if (selected) renderDetail(selected);
   else renderOverview();
   applyCliCapability();
+  content.scrollTop = scrollTop;
 }
 
 const updateState = { running: false, message: "" };
@@ -288,6 +294,8 @@ content.addEventListener("click", (event) => {
   const stack = toggle.closest(".stack");
   const open = stack.classList.toggle("open");
   toggle.setAttribute("aria-expanded", String(open));
+  if (open) closedStacks.delete(stack.dataset.key);
+  else closedStacks.add(stack.dataset.key);
 });
 
 search.addEventListener("input", () => {
