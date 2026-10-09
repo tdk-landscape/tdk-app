@@ -656,6 +656,53 @@
         .project-row > .row-meta { display: inline-flex; grid-column: 2; grid-row: 2; justify-self: end; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
         .project-row > .row-actions { grid-column: 1 / -1; grid-row: 3; justify-self: start; }
       }
+
+      /* ===== Glass buttons: frosted body, light edge, top highlight, press-in (loaded last) ===== */
+      :root { --gb-bg: rgba(255, 255, 255, .5); --gb-bg-hover: rgba(255, 255, 255, .7); --gb-bg-press: rgba(255, 255, 255, .38);
+        --gb-edge: rgba(255, 255, 255, .75); --gb-shadow: 0 1px 2px rgba(20, 20, 30, .07), 0 3px 10px rgba(20, 20, 30, .06);
+        --gb-hi: inset 0 1px 0 rgba(255, 255, 255, .95); --gb-press: inset 0 1px 4px rgba(20, 20, 30, .14);
+        --gb-blur: blur(20px) saturate(180%); --gb-text: var(--label); }
+      @media (prefers-color-scheme: dark) { :root { --gb-bg: rgba(255, 255, 255, .13); --gb-bg-hover: rgba(255, 255, 255, .2); --gb-bg-press: rgba(255, 255, 255, .08);
+        --gb-edge: rgba(255, 255, 255, .24); --gb-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 12px rgba(0, 0, 0, .22);
+        --gb-hi: inset 0 1px 0 rgba(255, 255, 255, .26); --gb-press: inset 0 1px 5px rgba(0, 0, 0, .35); } }
+
+      .button, .native .button, .link-btn, .native .link-btn {
+        background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur);
+        box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow), var(--gb-hi); color: var(--label);
+        transition: transform .1s cubic-bezier(.2, .8, .3, 1), background .15s ease, box-shadow .15s ease, filter .15s ease; }
+      .button:hover:not(:disabled), .native .button:hover:not(:disabled) { background: var(--gb-bg-hover); filter: none; }
+      .button:active:not(:disabled), .native .button:active:not(:disabled) { background: var(--gb-bg-press); transform: scale(.96); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-press); filter: none; }
+
+      /* Primary: accent-tinted glass */
+      .button.primary, .native .button.primary {
+        background: linear-gradient(180deg, color-mix(in srgb, var(--p-top) 86%, transparent), color-mix(in srgb, var(--p-bot) 80%, transparent));
+        backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); color: #fff;
+        box-shadow: 0 0 0 .5px color-mix(in srgb, var(--p-bot) 70%, #000), 0 2px 8px color-mix(in srgb, var(--p-bot) 35%, transparent), inset 0 1px 0 rgba(255, 255, 255, .45); }
+      .button.primary:hover:not(:disabled), .native .button.primary:hover:not(:disabled) { background: linear-gradient(180deg, color-mix(in srgb, var(--p-top) 96%, transparent), color-mix(in srgb, var(--p-bot) 90%, transparent)); }
+      .button.primary:active:not(:disabled), .native .button.primary:active:not(:disabled) { transform: scale(.96); box-shadow: 0 0 0 .5px var(--p-edge), inset 0 1px 4px rgba(0, 30, 90, .35); }
+
+      /* Danger: red-tinted glass */
+      .button.danger, .native .button.danger { color: var(--red); background: color-mix(in srgb, var(--red) 12%, var(--gb-bg)); box-shadow: 0 0 0 .5px color-mix(in srgb, var(--red) 35%, transparent), var(--gb-shadow), var(--gb-hi); }
+      .button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 18%, var(--gb-bg-hover)); }
+
+      /* Quiet buttons: glass only on hover/press */
+      .button.quiet, .native .button.quiet, .link-btn { background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .button.quiet:hover:not(:disabled), .native .button.quiet:hover:not(:disabled) { background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow); }
+      .button.quiet:active:not(:disabled) { background: var(--gb-bg-press); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-press); }
+      .link-btn:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); box-shadow: 0 0 0 .5px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+      /* Icon buttons get a glass disc on hover */
+      .icon-btn:hover { background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow), var(--gb-hi); }
+      .icon-btn:active { background: var(--gb-bg-press); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-press); transform: scale(.9); }
+
+      /* Segmented Start / Stop / Restart as one glass capsule */
+      .row-actions { background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); border-radius: 8px; padding: 2px; box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow); gap: 2px; }
+      .row-actions .button, .row-actions .button:first-child, .row-actions .button:last-child { border-radius: 6px; box-shadow: var(--gb-hi); background: transparent; }
+      .row-actions .button:hover:not(:disabled) { background: var(--gb-bg-hover); }
+      .row-actions .button.primary { background: linear-gradient(180deg, color-mix(in srgb, var(--p-top) 90%, transparent), color-mix(in srgb, var(--p-bot) 84%, transparent)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4); }
+      .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(180deg, var(--p-top), var(--p-bot)); }
+      .row-actions .button:active:not(:disabled) { background: var(--gb-bg-press); }
+      .row-actions .button.primary:active:not(:disabled) { background: var(--p-bot); }
     </style>
   </head>
   <body>
