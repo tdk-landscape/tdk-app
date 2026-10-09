@@ -1,6 +1,13 @@
 import Cocoa
 import WebKit
 
+final class DragStrip: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 { window?.performZoom(nil) } else { window?.performDrag(with: event) }
+    }
+}
+
 // Lightweight native shell: runs the bundled Node server and shows it in a WKWebView.
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
@@ -13,10 +20,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "TDK App"
-        window.contentView = webView
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        // Content runs under the (transparent) title bar; a thin strip keeps the window draggable.
+        let container = NSView()
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        let strip = DragStrip()
+        strip.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(webView)
+        container.addSubview(strip)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: container.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            strip.topAnchor.constraint(equalTo: container.topAnchor),
+            strip.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -130),
+            strip.heightAnchor.constraint(equalToConstant: 28),
+        ])
+        window.contentView = container
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
