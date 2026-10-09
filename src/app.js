@@ -94,7 +94,7 @@ export function discoverProjects({
     const queue = [{ path: scanRoot, depth: 0 }];
     let visited = 0;
     while (queue.length && visited < maxDirectoriesPerRoot && discovered.size < maxProjects) {
-      const current = queue.pop();
+      const current = queue.shift();
       visited += 1;
       if (existsSync(join(current.path, PROJECT_FILE))) {
         discovered.add(current.path);

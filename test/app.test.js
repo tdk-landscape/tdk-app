@@ -122,6 +122,18 @@ describe("TDK App local server", () => {
     assert(commonProjectScanRoots("/Users/example").includes("/var/www"));
   });
 
+  it("reaches shallow projects before a large sibling tree exhausts the directory cap", () => {
+    const root = mkdtempSync(join(tmpdir(), "tdk-app-scan-"));
+    tempDirs.push(root);
+    const project = join(root, "a-project");
+    mkdirSync(join(project, ".tdk"), { recursive: true });
+    writeFileSync(join(project, ".tdk", "project.json"), JSON.stringify({ project: { name: "shallow" } }));
+    for (let index = 0; index < 20; index += 1) mkdirSync(join(root, "z-large", `dir-${index}`), { recursive: true });
+
+    const projects = discoverProjects({ currentRoot: null, scanRoots: [root], maxDirectoriesPerRoot: 10 });
+    assert.deepEqual(projects.map((entry) => entry.root), [project]);
+  });
+
   it("returns project status and port conflicts from CLI JSON", async () => {
     const projects = [
       { id: "a", name: "a", root: "/projects/a" },
