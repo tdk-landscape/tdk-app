@@ -212,6 +212,44 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
   });
 }
 
+export const MIN_CLI_VERSION = "1.3.145";
+const INSTALL_URL = "https://github.com/tdk-landscape/tdk-cli-core#install";
+const LIFECYCLE_COMMANDS = ["start", "stop", "restart"];
+
+// Non-mutating probe: `tdk --version` for display and `tdk <cmd> --help` per lifecycle command.
+// Commander prints command-specific help ("Usage: tdk <cmd>") only when the command exists;
+// an older CLI falls back to the root help ("Usage: tdk [options] [command]").
+export async function probeCli(execute, cwd = process.cwd()) {
+  const probe = { root: cwd };
+  const base = { minVersion: MIN_CLI_VERSION, installUrl: INSTALL_URL, version: null };
+  const versionResult = await execute(probe, ["--version"], { timeoutMs: 10_000 });
+  if (versionResult.status !== 0) {
+    const missing = /ENOENT/.test(versionResult.stderr);
+    return {
+      ...base,
+      state: missing ? "missing" : "failed",
+      lifecycle: false,
+      message: missing
+        ? `The tdk CLI was not found. Install TDK CLI ${MIN_CLI_VERSION} or newer, or set TDK_BIN to its path.`
+        : `The tdk CLI did not respond to a version check (${versionResult.stderr.trim() || "timeout or non-zero exit"}). Check TDK_BIN and your install.`,
+    };
+  }
+  const version = versionResult.stdout.trim().split(/\s+/).pop() || null;
+  for (const command of LIFECYCLE_COMMANDS) {
+    const help = await execute(probe, [command, "--help"], { timeoutMs: 10_000 });
+    if (help.status !== 0 || !new RegExp(`^Usage: tdk ${command}\\b`, "m").test(help.stdout)) {
+      return {
+        ...base,
+        version,
+        state: "unsupported",
+        lifecycle: false,
+        message: `TDK CLI ${version ?? "(unknown version)"} does not support \`tdk ${LIFECYCLE_COMMANDS.join("/")}\`. Update to ${MIN_CLI_VERSION} or newer to enable Start, Stop and Restart; status, logs and endpoints still work.`,
+      };
+    }
+  }
+  return { ...base, version, state: "supported", lifecycle: true, message: null };
+}
+
 async function projectStatus(project, execute) {
   const status = readMachine(await execute(project, ["status", "--json", "--tilt"]));
   let services = [];
@@ -253,8 +291,19 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
+export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
+  let capability = null;
+  // Cache only a positive result so installing or updating the CLI is picked up on the next load.
+  const cliCapability = async () => {
+    if (capability?.lifecycle) return capability;
+    const result = await probe(runCommand).catch((error) => ({
+      state: "failed", lifecycle: false, version: null, minVersion: MIN_CLI_VERSION, installUrl: INSTALL_URL,
+      message: `The tdk CLI could not be checked: ${error instanceof Error ? error.message : String(error)}`,
+    }));
+    capability = result;
+    return result;
+  };
   const server = createServer((request, response) => {
     void (async () => {
       const address = server.address();
@@ -286,6 +335,9 @@ export function startAppServer({ projects, host = "127.0.0.1", port = 0, token =
       if (request.headers.origin && request.headers.origin !== origin) return sendJson(response, 403, { error: "Invalid origin." });
       if (request.method === "POST" && request.headers.origin !== origin) return sendJson(response, 403, { error: "A same-origin request is required." });
 
+      if (url.pathname === "/api/cli" && request.method === "GET") {
+        return sendJson(response, 200, await cliCapability());
+      }
       if (url.pathname === "/api/projects" && request.method === "GET") {
         const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand)));
         const conflicts = findConflicts(snapshots);
@@ -316,6 +368,10 @@ export function startAppServer({ projects, host = "127.0.0.1", port = 0, token =
         const body = await readBody(request);
         const project = projects.find((entry) => entry.id === body.project);
         if (!project || !["start", "stop", "restart"].includes(body.operation)) return sendJson(response, 400, { error: "Choose a valid project and lifecycle action." });
+        const cli = await cliCapability();
+        if (!cli.lifecycle) {
+          return sendJson(response, 409, { error: cli.message, code: "cli_unsupported", cli: { state: cli.state, version: cli.version, minVersion: cli.minVersion, installUrl: cli.installUrl } });
+        }
         const args = [body.operation, "--json"];
         if (typeof body.stack === "string" && body.stack) args.push(body.stack);
         if (Array.isArray(body.resources)) {

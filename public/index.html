@@ -102,6 +102,8 @@
       .button:hover { background: var(--surface-alt); border-color: color-mix(in srgb, var(--secondary) 32%, var(--line)); }
       .button:active { transform: scale(.98); }
       .button:disabled { opacity: .48; cursor: wait; }
+      .button[title]:disabled { cursor: not-allowed; }
+      .cli-banner a { color: inherit; text-decoration: underline; }
       .button svg { width: 13px; height: 13px; }
       .button.primary { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--accent-wash); color: var(--accent); }
       .button.danger { color: var(--red); }
