@@ -78,7 +78,7 @@ function renderSidebar() {
   }
   projectList.innerHTML = visible.map((project) => `
     <button class="project-item ${project.id === selectedProjectId ? "active" : ""}" type="button" data-select-project="${esc(project.id)}" title="${esc(project.path)}">
-      ${symbolMarkup(project.name)}<span class="project-item-copy"><span class="project-item-name">${esc(project.name)}</span><span class="project-item-path">${esc(project.path)}</span></span><i class="state-dot ${project.tiltRunning ? "ready" : ""}"></i>
+      <span class="project-item-name">${esc(project.name)}</span>
     </button>`).join("");
 }
 
