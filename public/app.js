@@ -53,6 +53,31 @@ function symbolMarkup(name) {
   return `<span class="project-symbol" aria-hidden="true">${esc((name || "T").slice(0, 1).toUpperCase())}</span>`;
 }
 
+const ICONS = {
+  start: '<path d="M6 4.5v11l9-5.5z" fill="currentColor"/>',
+  stop: '<rect x="5" y="5" width="10" height="10" rx="2" fill="currentColor"/>',
+  restart: '<path d="M16 10a6 6 0 1 1-1.8-4.3M16 3.5V7h-3.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  logs: '<path d="M5 3.5h7l3 3v10H5z M12 3.5v3h3 M7.5 10h5M7.5 13h5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>',
+  folder: '<path d="M2.5 6a1.5 1.5 0 0 1 1.5-1.5h3l1.5 1.8H16A1.5 1.5 0 0 1 17.5 7.8v6.7A1.5 1.5 0 0 1 16 16H4a1.5 1.5 0 0 1-1.5-1.5z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/>',
+  terminal: '<rect x="2.5" y="4" width="15" height="12" rx="2.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="m6 8 2.5 2L6 12M10.5 12.5H14" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  plus: '<path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  stack: '<path d="m10 3.5 7 3.5-7 3.5L3 7zM3 10.5l7 3.5 7-3.5M3 14l7 3.5 7-3.5" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>',
+  move: '<path d="M4 10h11M11 5.5 15.5 10 11 14.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  regenerate: '<path d="M4 10a6 6 0 0 1 10.5-4M16 10a6 6 0 0 1-10.5 4M14.5 3v3.5H11M5.5 17v-3.5H9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+  verify: '<path d="M10 2.8 16 5v4.6c0 3.6-2.4 6-6 7.6-3.6-1.6-6-4-6-7.6V5z M7.2 10l2 2 3.6-3.8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>',
+  hide: '<path d="M3 10s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z M4 4l12 12" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
+};
+const ACTION_ICONS = { start: "start", stop: "stop", restart: "restart", logs: "logs", "open-project": "folder", "open-terminal": "terminal", "new-project": "plus", "new-resource": "plus", "new-stack": "stack", "move-resource": "move", "config-regenerate": "regenerate", "config-verify": "verify", "hide-project": "hide", "doctor-refresh": "restart" };
+
+// Adds a small SF-Symbol-style glyph in front of each action button label.
+function decorateButtons(root = document) {
+  for (const button of root.querySelectorAll("button[data-action]:not([data-iconed])")) {
+    const icon = ICONS[ACTION_ICONS[button.dataset.action]];
+    button.dataset.iconed = "1";
+    if (icon) button.insertAdjacentHTML("afterbegin", `<svg class="btn-icon" viewBox="0 0 20 20" aria-hidden="true">${icon}</svg>`);
+  }
+}
+
 function actionButton(action, project, scope = "project", name = "", label = action[0].toUpperCase() + action.slice(1), extra = "") {
   return `<button class="button ${action === "start" ? "primary" : action === "stop" ? "danger" : ""} ${extra}" type="button" data-action="${esc(action)}" data-project="${esc(project.id)}" data-scope="${esc(scope)}" data-name="${esc(name)}">${esc(label)}</button>`;
 }
@@ -62,10 +87,15 @@ function actionSet(project, scope = "project", name = "", compact = false) {
   return `<div class="${klass}">${actionButton("start", project, scope, name, "Start")}${scope === "project" ? `${actionButton("stop", project, scope, name, "Stop")}${actionButton("restart", project, scope, name, "Restart")}` : ""}</div>`;
 }
 
+const hidden = new Set((() => { try { return JSON.parse(localStorage.getItem("tdk-hidden") || "[]"); } catch { return []; } })());
+let showHidden = false;
+function saveHidden() { try { localStorage.setItem("tdk-hidden", JSON.stringify([...hidden])); } catch {} }
+
 function filteredProjects() {
-  if (!searchTerm) return projects;
+  const base = showHidden ? projects : projects.filter((project) => !hidden.has(project.id));
+  if (!searchTerm) return base;
   const query = searchTerm.toLowerCase();
-  return projects.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(query));
+  return base.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(query));
 }
 
 function renderSidebar() {
@@ -77,8 +107,8 @@ function renderSidebar() {
     return;
   }
   projectList.innerHTML = visible.map((project) => `
-    <button class="project-item ${project.id === selectedProjectId ? "active" : ""}" type="button" data-select-project="${esc(project.id)}" title="${esc(project.path)}">
-      <span class="project-item-name">${esc(project.name)}</span>
+    <button class="project-item ${project.id === selectedProjectId ? "active" : ""}" type="button" data-select-project="${esc(project.id)}" title="${esc(project.name)} · ${esc(project.path)}">
+      ${symbolMarkup(project.name)}<span class="project-item-name">${esc(project.name)}</span>
     </button>`).join("");
 }
 
@@ -88,9 +118,9 @@ function overviewGauges(ready, resources) {
   const running = projects.filter((project) => project.tiltRunning).length;
   const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : null);
   return [
-    gaugeCard({ value: average, text: average == null ? "…" : String(average), title: "Average health", caption: scores.length ? `${scores.length} of ${projects.length} projects checked` : "Running tdk doctor…", cls: average == null ? "none" : undefined }),
-    gaugeCard({ value: pct(ready, resources), text: `${ready}`, title: "Resources ready", caption: `${ready} of ${resources} resources`, cls: resources ? (ready === resources ? "good" : ready ? "warn" : "none") : "none" }),
-    gaugeCard({ value: pct(running, projects.length), text: `${running}`, title: "Projects running", caption: `${running} of ${projects.length} projects`, cls: running ? "good" : "none" }),
+    gaugeCard({ value: average, text: average == null ? "…" : String(average), sub: average == null ? "" : "of 100", title: "Average health", caption: scores.length ? `${scores.length} of ${projects.length} projects checked` : "Running tdk doctor…", cls: average == null ? "none" : undefined }),
+    gaugeCard({ value: pct(ready, resources), text: `${ready}`, sub: `of ${resources}`, title: "Resources ready", caption: `${ready} of ${resources} resources`, cls: resources ? (ready === resources ? "good" : ready ? "warn" : "none") : "none" }),
+    gaugeCard({ value: pct(running, projects.length), text: `${running}`, sub: `of ${projects.length}`, title: "Projects running", caption: `${running} of ${projects.length} projects`, cls: running ? "good" : "none" }),
   ].join("");
 }
 
@@ -113,8 +143,8 @@ function renderOverview() {
   }).join("");
 
   content.innerHTML = `<div class="content-inner">
-    <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p></div>
-      </div>
+    <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p>${hidden.size ? `<div class="hidden-note">${hidden.size} hidden · <button type="button" data-action="toggle-hidden">${showHidden ? "Hide them again" : "Show them"}</button></div>` : ""}</div>
+      <div class="head-actions"><button class="button primary" type="button" data-action="new-project">New project</button></div></div>
     ${collapsible("summary", "Summary", `<div class="gauges">${overviewGauges(ready, resources)}</div>`)}
     <div id="notice" class="notice" role="status"></div>
     ${visible.length ? collapsible("projects", "Projects", `<section class="project-table" aria-label="TDK projects">${rows}</section>`, `${visible.length} shown`) : `<div class="empty"><span class="empty-icon">⌕</span><strong>${projects.length ? "No matching projects" : "No TDK projects found"}</strong><p>${projects.length ? "Try another project name or folder path." : "TDK App searches common development folders. Add a location with --scan-root or initialize a project with tdk project."}</p></div>`}
@@ -143,7 +173,7 @@ function renderDetail(project) {
       <div class="resource-name" title="${esc(resource.name)}">${esc(resource.name)}${resource.type ? `<span class="resource-type">${esc(resource.type)}</span>` : ""}</div>
       ${statusMarkup(resource.status)}
       ${resource.url ? `<a class="resource-url" href="${esc(resource.url)}" target="_blank" rel="noreferrer">${esc(resource.url)}</a>` : `<span class="resource-url">No endpoint</span>`}
-      <div class="resource-actions">${actionButton("start", project, "resource", resource.name)}<button class="button" type="button" data-action="logs" data-project="${esc(project.id)}" data-name="${esc(resource.name)}">Logs</button></div>
+      <div class="resource-actions">${actionButton("start", project, "resource", resource.name)}<button class="button" type="button" data-action="move-resource" data-project="${esc(project.id)}" data-name="${esc(resource.name)}" data-stack="${esc(resource.stack || "")}">Move</button><button class="button" type="button" data-action="logs" data-project="${esc(project.id)}" data-name="${esc(resource.name)}">Logs</button></div>
     </div>`).join("") : `<div class="resource-row"><span class="resource-name">No resources assigned</span></div>`;
     const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${actionButton("start", project, "stack", name)}</div>`;
     return `<section class="stack ${closedStacks.has(`${project.id}/${name}`) ? "" : "open"}" data-stack="${esc(name)}" data-key="${esc(`${project.id}/${name}`)}"><div class="stack-head"><button class="stack-toggle" type="button" aria-expanded="${!closedStacks.has(`${project.id}/${name}`)}">${chevronMarkup()}<span class="stack-name">${esc(name)}</span><span class="stack-count">${items.length} resource${items.length === 1 ? "" : "s"}</span></button>${quickActions}</div><div class="resource-list">${resourcesMarkup}</div></section>`;
@@ -155,11 +185,11 @@ function renderDetail(project) {
     <div id="notice" class="notice" role="status"></div>
     ${project.error ? `<div class="notice show error">Could not read status: ${esc(project.error)}</div>` : ""}
     <div class="detail-head"><div class="detail-title"><button class="back-link" type="button" data-view-overview>← All projects</button><h1>${esc(project.name)}</h1><code class="detail-path">${esc(project.path)}</code></div>
-      <div class="detail-actions">${actionSet(project)}<button class="button" type="button" data-action="open-project" data-project="${esc(project.id)}">Open folder</button><button class="button" type="button" data-action="open-terminal" data-project="${esc(project.id)}">Open terminal</button></div></div>
+      <div class="detail-actions">${actionSet(project)}<button class="button" type="button" data-action="open-project" data-project="${esc(project.id)}">Open folder</button><button class="button" type="button" data-action="config-regenerate" data-project="${esc(project.id)}">Regenerate</button><button class="button" type="button" data-action="config-verify" data-project="${esc(project.id)}">Verify</button><button class="button" type="button" data-action="hide-project" data-project="${esc(project.id)}">${hidden.has(project.id) ? "Unhide" : "Hide"}</button><button class="button" type="button" data-action="open-terminal" data-project="${esc(project.id)}">Open terminal</button></div></div>
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
-    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total`)}
+    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="button" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="button primary" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
   </div>`;
 }
 
@@ -186,6 +216,7 @@ function render() {
   if (selected) renderDetail(selected);
   else renderOverview();
   applyCliCapability();
+  decorateButtons();
   applyActiveNotice();
   applyBusy();
   content.scrollTop = scrollTop;
@@ -201,25 +232,33 @@ function scoreClass(score) {
   return score >= 90 ? "good" : score >= 60 ? "warn" : "bad";
 }
 
-// Circular gauge; value is 0-100 or null. Colour follows the same thresholds everywhere.
-function ringMarkup({ value, text, label = "", size = 44, stroke = 5, cls = scoreClass(value), title = "" }) {
+// macOS-style activity ring: gradient stroke with round caps, rounded numerals, optional caption line.
+let ringCounter = 0;
+function ringMarkup({ value, text, sub = "", label = "", size = 44, stroke = Math.max(4, Math.round(size / 10)), cls = scoreClass(value), title = "" }) {
+  const id = `ring-${++ringCounter}`;
   const radius = (size - stroke) / 2;
   const circumference = 2 * Math.PI * radius;
   const filled = value == null ? 0 : Math.max(0, Math.min(100, value)) / 100 * circumference;
-  const fontSize = Math.round(size * (size >= 80 ? 0.26 : 0.34));
+  const big = size >= 80;
+  const numSize = Math.round(size * (big ? 0.3 : 0.34));
+  const center = size / 2;
+  const numY = sub ? center - size * 0.05 : center;
   return `<span class="ring ${cls}" style="width:${size}px;height:${size}px" ${title ? `title="${esc(title)}"` : ""} role="img" aria-label="${esc(label || text)}">
-    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><circle class="ring-track" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}"/><circle class="ring-fill" cx="${size / 2}" cy="${size / 2}" r="${radius}" fill="none" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${size / 2} ${size / 2})"/><text x="${size / 2}" y="${size / 2}" dy=".35em" text-anchor="middle" font-size="${fontSize}">${esc(text)}</text></svg></span>`;
+    <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--ring-a)"/><stop offset="1" style="stop-color:var(--ring-b)"/></linearGradient></defs>
+    <circle class="ring-track" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke-width="${stroke}"/>
+    <circle class="ring-fill" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="url(#${id})" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${center} ${center})"/>
+    <text class="ring-num" x="${center}" y="${numY}" dy=".35em" text-anchor="middle" font-size="${numSize}">${esc(text)}</text>${sub ? `<text class="ring-sub" x="${center}" y="${center + size * 0.2}" dy=".35em" text-anchor="middle" font-size="${Math.round(size * 0.12)}">${esc(sub)}</text>` : ""}</svg></span>`;
 }
 
 function scoreMarkup(project, size = 44) {
   const result = doctors.get(project.id);
   if (!result) return ringMarkup({ value: null, text: "…", size, cls: "none", title: "Running tdk doctor…" });
   if (result.error) return ringMarkup({ value: null, text: "—", size, cls: "none", title: `Doctor failed: ${result.error}` });
-  return ringMarkup({ value: result.score, text: result.score == null ? "—" : String(result.score), size, title: `Health ${result.score ?? "—"}/100 · ${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed`, label: `Health ${result.score}` });
+  return ringMarkup({ value: result.score, text: result.score == null ? "—" : String(result.score), size, sub: size >= 80 ? "of 100" : "", title: `Health ${result.score ?? "—"}/100 · ${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed`, label: `Health ${result.score}` });
 }
 
-function gaugeCard({ value, text, title, caption, cls }) {
-  return `<div class="gauge">${ringMarkup({ value, text, size: 92, stroke: 9, cls: cls ?? scoreClass(value), label: title })}<div><strong>${esc(title)}</strong><span>${esc(caption)}</span></div></div>`;
+function gaugeCard({ value, text, sub = "", title, caption, cls }) {
+  return `<div class="gauge">${ringMarkup({ value, text, sub, size: 104, stroke: 10, cls: cls ?? scoreClass(value), label: title })}<strong>${esc(title)}</strong><span>${esc(caption)}</span></div>`;
 }
 
 function stackedBar(result) {
@@ -254,7 +293,7 @@ function doctorSection(project) {
   if (result.error) return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`, rerun);
   const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
   const list = issues.length ? issues.map((check) => `<div class="doctor-item ${check.status}"><strong>${esc(check.name)}</strong><span>${esc(check.message)}</span>${check.fix ? `<code>${esc(check.fix)}</code>` : ""}</div>`).join("") : `<div class="doctor-item pass"><strong>All ${result.total} checks passed</strong></div>`;
-  return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong><span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span>${stackedBar(result)}</div></div>${list}</div>`, rerun);
+  return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong>${stackedBar(result)}<div class="legend"><span><i class="pass"></i>${result.passed} passed</span><span><i class="warning"></i>${result.warnings} warnings</span><span><i class="fail"></i>${result.failed} failed</span></div></div></div>${list}</div>`, rerun);
 }
 
 const updateState = { running: false, message: "" };
@@ -371,6 +410,8 @@ async function fixDockerAndRetry(button) {
 
 async function handleAction(button) {
   const { action, project, scope, name } = button.dataset;
+  const crud = await handleCrud(action, project, name, button.dataset);
+  if (crud) return;
   if (action === "logs") {
     document.querySelector("#log-title").textContent = `Recent logs · ${name}`;
     document.querySelector("#log-body").textContent = "Loading…";
@@ -483,7 +524,7 @@ setInterval(refreshData, 7000);
 // Sidebar: collapse the whole sidebar (button or Cmd+B) and the Workspaces list.
 const appShell = document.querySelector(".app");
 function applySidebarState() {
-  appShell.classList.toggle("side-hidden", collapsed.has("side"));
+  appShell.classList.toggle("rail", collapsed.has("side"));
   document.querySelector(".sidebar").classList.toggle("ws-collapsed", collapsed.has("ws"));
   document.querySelector("#ws-toggle")?.setAttribute("aria-expanded", String(!collapsed.has("ws")));
 }
@@ -498,3 +539,165 @@ document.addEventListener("keydown", (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "b") { event.preventDefault(); toggleKey("side"); }
 });
 applySidebarState();
+
+// ---------- Create / update actions (all go through the TDK CLI on the server) ----------
+const KEBAB = /^[a-z][a-z0-9-]{0,62}$/;
+let meta = null;
+async function loadMeta() {
+  if (!meta) meta = await api("/api/meta").catch(() => ({ defaultParent: "~", templates: [], resourceTypes: ["backend", "frontend", "worker", "mcp", "bring-your-own", "sdk"] }));
+  return meta;
+}
+
+const formDialog = document.querySelector("#form-dialog");
+
+function fieldMarkup(field) {
+  const id = `f-${field.name}`;
+  const hint = field.hint ? `<small>${esc(field.hint)}</small>` : "";
+  if (field.type === "select") return `<label class="field" for="${id}">${esc(field.label)}<select id="${id}" name="${esc(field.name)}">${field.options.map((option) => `<option value="${esc(option.value)}" ${option.value === field.value ? "selected" : ""}>${esc(option.label)}</option>`).join("")}</select>${hint}</label>`;
+  if (field.type === "checks") return `<div class="field">${esc(field.label)}<div class="checks">${field.options.length ? field.options.map((option) => `<label><input type="checkbox" name="${esc(field.name)}" value="${esc(option)}"> ${esc(option)}</label>`).join("") : "<span>No resources yet.</span>"}</div>${hint}</div>`;
+  return `<label class="field" for="${id}">${esc(field.label)}<input id="${id}" name="${esc(field.name)}" type="${field.type === "number" ? "number" : "text"}" value="${esc(field.value ?? "")}" placeholder="${esc(field.placeholder ?? "")}" autocomplete="off" spellcheck="false" ${field.list ? `list="${id}-list"` : ""}>${field.list ? `<datalist id="${id}-list">${field.list.map((item) => `<option value="${esc(item)}"></option>`).join("")}</datalist>` : ""}${hint}</label>`;
+}
+
+function openForm({ title, intro = "", fields, submit, validate, run }) {
+  formDialog.innerHTML = `<form class="form" novalidate>
+    <div class="modal-head"><h2>${esc(title)}</h2><button class="button quiet" type="button" data-close>Close</button></div>
+    <div class="form-body">${intro ? `<p class="form-intro">${esc(intro)}</p>` : ""}${fields.map(fieldMarkup).join("")}<div class="form-error" role="alert" hidden></div><pre class="form-output" hidden></pre></div>
+    <div class="form-foot"><button class="button" type="button" data-close>Cancel</button><button class="button primary" type="submit">${esc(submit)}</button></div></form>`;
+  const form = formDialog.querySelector("form");
+  const errorBox = form.querySelector(".form-error");
+  const output = form.querySelector(".form-output");
+  const submitButton = form.querySelector('[type="submit"]');
+  let finished = false;
+  const fail = (message) => { errorBox.textContent = message; errorBox.hidden = false; };
+  for (const close of form.querySelectorAll("[data-close]")) close.addEventListener("click", () => formDialog.close());
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (finished) return formDialog.close();
+    errorBox.hidden = true;
+    const values = {};
+    for (const field of fields) {
+      if (field.type === "checks") values[field.name] = [...form.querySelectorAll(`[name="${field.name}"]:checked`)].map((input) => input.value);
+      else values[field.name] = form.elements[field.name].value.trim();
+    }
+    const problem = validate?.(values);
+    if (problem) return fail(problem);
+    submitButton.disabled = true;
+    submitButton.textContent = "Working…";
+    try {
+      const result = await run(values);
+      output.textContent = result.output || (result.ok ? "Done." : "TDK reported a problem.");
+      output.hidden = false;
+      if (result.ok) {
+        finished = true;
+        submitButton.textContent = "Done";
+        await refreshData();
+      } else {
+        fail(result.timedOut ? "TDK did not finish in time." : "TDK could not complete this action. Details below.");
+        submitButton.textContent = submit;
+      }
+    } catch (error) {
+      fail(error.message);
+      submitButton.textContent = submit;
+    } finally {
+      submitButton.disabled = false;
+    }
+  });
+  formDialog.showModal();
+  form.querySelector("input, select")?.focus();
+}
+
+const kebabProblem = (label, value) => (KEBAB.test(value) ? "" : `${label} must be lowercase letters, numbers and dashes, starting with a letter (for example my-api).`);
+const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body) });
+
+async function handleCrud(action, projectId, name, dataset) {
+  const project = projects.find((entry) => entry.id === projectId);
+  if (action === "toggle-hidden") { showHidden = !showHidden; render(); return true; }
+  if (action === "hide-project" && project) {
+    if (hidden.has(project.id)) hidden.delete(project.id); else { hidden.add(project.id); selectedProjectId = null; }
+    saveHidden();
+    render();
+    return true;
+  }
+  if (action === "new-project") { await openNewProject(); return true; }
+  if (action === "config-regenerate" || action === "config-verify") {
+    const operation = action === "config-regenerate" ? "regenerate" : "verify";
+    document.querySelector("#log-title").textContent = `${operation === "regenerate" ? "Regenerate configs" : "Verify configs"} · ${project?.name ?? ""}`;
+    document.querySelector("#log-body").textContent = "Running…";
+    document.querySelector("#logs").showModal();
+    try {
+      const result = await post("/api/config", { project: projectId, operation });
+      document.querySelector("#log-body").textContent = `${result.ok ? "Success" : "Problem found"}\n\n${result.output || "No output."}`;
+    } catch (error) {
+      document.querySelector("#log-body").textContent = error.message;
+    }
+    return true;
+  }
+  if (!project) return false;
+  const stackNames = [...new Set((project.stacks || []).map((stack) => stack.name).filter(Boolean))];
+  if (action === "new-resource") {
+    const info = await loadMeta();
+    openForm({
+      title: `Add resource · ${project.name}`,
+      intro: "Creates a new service from a TDK template using tdk resource.",
+      fields: [
+        { name: "name", label: "Name", placeholder: "my-api", hint: "Lowercase, dashes allowed." },
+        { name: "type", label: "Type", type: "select", value: "backend", options: info.resourceTypes.map((type) => ({ value: type, label: type })) },
+        { name: "stack", label: "Stack (optional)", placeholder: "default", list: stackNames },
+        { name: "framework", label: "Framework (optional)", placeholder: "hono, react, …" },
+        { name: "port", label: "Port (optional)", type: "number", hint: "Leave empty to use the next free port." },
+      ],
+      submit: "Create resource",
+      validate: (v) => kebabProblem("Name", v.name) || (v.stack && kebabProblem("Stack", v.stack)) || (v.framework && kebabProblem("Framework", v.framework)) || "",
+      run: (v) => post("/api/resources", { project: projectId, name: v.name, type: v.type, stack: v.stack || undefined, framework: v.framework || undefined, port: v.port ? Number(v.port) : undefined }),
+    });
+    return true;
+  }
+  if (action === "new-stack") {
+    openForm({
+      title: `New stack · ${project.name}`,
+      intro: "Groups resources into a stack using tdk stack.",
+      fields: [
+        { name: "name", label: "Stack name", placeholder: "core" },
+        { name: "resources", label: "Resources", type: "checks", options: (project.resources || []).map((resource) => resource.name) },
+      ],
+      submit: "Create stack",
+      validate: (v) => kebabProblem("Stack name", v.name) || (v.resources.length ? "" : "Pick at least one resource."),
+      run: (v) => post("/api/stacks", { project: projectId, name: v.name, resources: v.resources }),
+    });
+    return true;
+  }
+  if (action === "move-resource") {
+    openForm({
+      title: `Move ${name}`,
+      intro: `Currently in ${dataset.stack || "no stack"}. Pick an existing stack or type a new name.`,
+      fields: [{ name: "stack", label: "Stack", value: dataset.stack || "", placeholder: "core", list: stackNames }],
+      submit: "Move resource",
+      validate: (v) => kebabProblem("Stack", v.stack),
+      run: (v) => post("/api/stacks", { project: projectId, name: v.stack, resources: [name] }),
+    });
+    return true;
+  }
+  return false;
+}
+
+async function openNewProject() {
+  const info = await loadMeta();
+  openForm({
+    title: "New project",
+    intro: "Runs tdk project to create a blank project or clone a starter template.",
+    fields: [
+      { name: "name", label: "Folder name", placeholder: "my-shop" },
+      { name: "template", label: "Template", type: "select", value: "", options: [{ value: "", label: "Blank project" }, ...info.templates.map((template) => ({ value: template, label: template }))] },
+      { name: "parent", label: "Create inside", value: info.defaultParent, list: info.roots, hint: "A folder inside your home directory. ~ means your home folder." },
+    ],
+    submit: "Create project",
+    validate: (v) => kebabProblem("Folder name", v.name) || (v.parent ? "" : "Choose a folder."),
+    run: async (v) => {
+      const result = await post("/api/projects/create", { name: v.name, template: v.template || undefined, parent: v.parent });
+      if (result.ok && result.project) selectedProjectId = result.project.id;
+      return result;
+    },
+  });
+}
+
+document.querySelector("#new-project-nav").addEventListener("click", () => openNewProject());

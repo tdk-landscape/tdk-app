@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { checkDocker, discoverProjects, lowDiskNote, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
+import { checkDocker, discoverProjects, lowDiskNote, maskPaths, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -575,6 +575,154 @@ describe("Docker restart", () => {
     assert.equal(response.status, 500);
     assert.match(response.json.error, /osascript/);
     await assertAlive(server);
+  });
+});
+
+describe("username masking", () => {
+  it("masks the home path and any /Users/<name> in every JSON response", async () => {
+    const user = homedir().split("/").pop();
+    const home = homedir();
+    const { server } = await boot({
+      projects: [{ id: "a", name: "a", root: `${home}/Developer/a` }],
+      runCommand: async () => okEnvelope({ resources: [{ name: "x", message: `see /Users/someone-else/app and ${home}/Developer/a/log` }], lines: [`${home}/x`] }),
+    });
+    for (const path of ["/api/projects", "/api/logs?project=a&resource=x", "/api/meta", "/api/doctor?project=a"]) {
+      const response = await raw(server, { path });
+      assert(!response.text.includes(user), `${path} leaked the username: ${response.text.slice(0, 200)}`);
+      assert(!response.text.includes("someone-else"));
+    }
+    const projectsResponse = await raw(server, { path: "/api/projects" });
+    assert.match(projectsResponse.json.projects[0].path, /\/\*\*\*\*\/Developer\/a$/);
+  });
+
+  it("masks usernames inside error messages too", async () => {
+    const { server } = await boot({ runCommand: async () => { throw new Error(`ENOENT /Users/secretname/x`); } });
+    const response = await raw(server, { path: "/api/logs?project=a&resource=x" });
+    assert(!response.text.includes("secretname"));
+    assert.equal(maskPaths("/Users/abc/x /Users/****/y"), "/Users/****/x /Users/****/y");
+  });
+});
+
+describe("CRUD actions through the TDK CLI", () => {
+  const record = () => {
+    const calls = [];
+    return { calls, runCommand: async (project, args) => { calls.push({ root: project.root, args }); return { status: 0, stdout: "done", stderr: "" }; } };
+  };
+
+  it("creates a resource with the right flags", async () => {
+    const { calls, runCommand } = record();
+    const { server } = await boot({ runCommand });
+    const response = await post(server, "/api/resources", { project: "a", name: "my-api", type: "backend", stack: "core", framework: "hono", language: "bun", port: 4100 });
+    assert.equal(response.status, 200);
+    assert.equal(response.json.ok, true);
+    assert.deepEqual(calls[0].args, ["resource", "my-api", "--type", "backend", "--yes", "--stack", "core", "--framework", "hono", "--language", "bun", "--port", "4100"]);
+  });
+
+  const badResources = [
+    {}, { project: "a" }, { project: "a", name: "My API" }, { project: "a", name: "-rf" }, { project: "a", name: "api; rm" }, { project: "a", name: "../x" },
+    { project: "a", name: "ok", type: "nope" }, { project: "a", name: "ok", stack: "--help" }, { project: "a", name: "ok", stack: "A B" }, { project: "a", name: "ok", framework: "--x" },
+    { project: "a", name: "ok", language: ["bun"] }, { project: "a", name: "ok", port: 0 }, { project: "a", name: "ok", port: 70000 }, { project: "a", name: "ok", port: "80" },
+    { project: "zzz", name: "ok" }, { project: ["a"], name: "ok" }, { project: "a", name: "a".repeat(80) },
+  ];
+  badResources.forEach((body, index) => {
+    it(`rejects invalid resource request #${index} without running the CLI`, async () => {
+      const { calls, runCommand } = record();
+      const { server } = await boot({ runCommand });
+      assert.equal((await post(server, "/api/resources", body)).status, 400);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  it("assigns resources to a stack (create or move)", async () => {
+    const { calls, runCommand } = record();
+    const { server } = await boot({ runCommand });
+    assert.equal((await post(server, "/api/stacks", { project: "a", name: "core", resources: ["api", "web"] })).status, 200);
+    assert.deepEqual(calls[0].args, ["stack", "core", "--resources", "api", "web", "--yes"]);
+    for (const body of [{ project: "a", name: "core" }, { project: "a", name: "core", resources: [] }, { project: "a", name: "core", resources: ["--yes"] }, { project: "a", name: "Core", resources: ["a"] }, { project: "a", name: "core", resources: "api" }, { project: "a", name: "core", resources: Array.from({ length: 31 }, (_, i) => `r${i}`) }]) {
+      assert.equal((await post(server, "/api/stacks", body)).status, 400, JSON.stringify(body));
+    }
+    assert.equal(calls.length, 1);
+  });
+
+  it("regenerates and verifies config, rejecting anything else", async () => {
+    const { calls, runCommand } = record();
+    const { server } = await boot({ runCommand });
+    await post(server, "/api/config", { project: "a", operation: "regenerate" });
+    await post(server, "/api/config", { project: "a", operation: "verify" });
+    assert.deepEqual(calls.map((call) => call.args), [["config", "regenerate"], ["project", "--check"]]);
+    for (const operation of ["delete", "__proto__", "constructor", "toString", ["verify"], undefined]) {
+      assert.equal((await post(server, "/api/config", { project: "a", operation })).status, 400, String(operation));
+    }
+    assert.equal(calls.length, 2);
+  });
+
+  it("reports CLI failure as ok:false with output, not an error status", async () => {
+    const { server } = await boot({ runCommand: async () => ({ status: 3, stdout: "", stderr: "name already exists" }) });
+    const response = await post(server, "/api/resources", { project: "a", name: "dup" });
+    assert.equal(response.status, 200);
+    assert.equal(response.json.ok, false);
+    assert.match(response.json.output, /already exists/);
+  });
+
+  it("creates a blank project and registers it in the list", async () => {
+    const parent = tempDir();
+    const calls = [];
+    const runCommand = async (project, args) => {
+      calls.push({ root: project.root, args });
+      if (args[0] === "project") { mkdirSync(join(project.root, ".tdk"), { recursive: true }); writeFileSync(join(project.root, ".tdk", "project.json"), JSON.stringify({ project: { name: "shop" } })); }
+      return { status: 0, stdout: "created", stderr: "" };
+    };
+    const list = [];
+    const { server } = await boot({ projects: list, runCommand });
+    const response = await post(server, "/api/projects/create", { parent, name: "shop" });
+    assert.equal(response.status, 200, response.text);
+    assert.equal(response.json.ok, true);
+    assert.equal(response.json.project.name, "shop");
+    assert.deepEqual(calls[0].args, ["project", "--yes"]);
+    assert.equal(list.length, 1, "project is added to the live list");
+    assert.equal((await post(server, "/api/projects/create", { parent, name: "shop" })).status, 409, "existing folder is refused");
+  });
+
+  it("creates from a template with --path and cleans up a failed blank create", async () => {
+    const parent = tempDir();
+    const calls = [];
+    const { server } = await boot({ projects: [], runCommand: async (project, args) => { calls.push({ root: project.root, args }); return { status: 1, stdout: "", stderr: "boom" }; } });
+    const failed = await post(server, "/api/projects/create", { parent, name: "blank" });
+    assert.equal(failed.json.ok, false);
+    assert.equal(existsSync(join(parent, "blank")), false, "empty folder removed after failure");
+    await post(server, "/api/projects/create", { parent, name: "shop", template: "restaurant" });
+    assert.equal(calls[1].args[0], "project");
+    assert.deepEqual(calls[1].args.slice(1, 2), ["restaurant"]);
+    assert(calls[1].args.includes("--path") && calls[1].args.includes("--yes"));
+  });
+
+  it("refuses unsafe project creation", async () => {
+    const parent = tempDir();
+    const { calls, runCommand } = record();
+    const { server } = await boot({ runCommand });
+    const bad = [
+      { parent: "/", name: "x" }, { parent: "/etc", name: "x" }, { parent: "relative/path", name: "x" }, { parent: join(parent, "missing"), name: "x" }, { parent: 5, name: "x" },
+      { parent: `${parent}/../..`, name: "x" }, { parent, name: "../escape" }, { parent, name: "Bad Name" }, { parent, name: "-x" }, { parent, name: "" }, { parent, name: "ok", template: "evil" }, { parent, name: "ok", template: "--force" },
+    ];
+    for (const body of bad) assert.equal((await post(server, "/api/projects/create", body)).status, 400, JSON.stringify(body));
+    assert.equal(calls.length, 0);
+  });
+
+  it("serves meta with tilde paths", async () => {
+    const { server } = await boot();
+    const meta = await raw(server, { path: "/api/meta" });
+    assert.equal(meta.status, 200);
+    assert(meta.json.templates.includes("restaurant") && meta.json.resourceTypes.includes("backend"));
+    assert.match(meta.json.defaultParent, /^~|^\//);
+  });
+
+  it("all create/update endpoints need token and same-origin POST", async () => {
+    const { server } = await boot();
+    for (const path of ["/api/resources", "/api/stacks", "/api/config", "/api/projects/create"]) {
+      assert.equal((await post(server, path, {}, { headers: {} })).status, 403, path);
+      assert.equal((await raw(server, { path })).status, 404, `${path} GET`);
+      assert.equal((await post(server, path, "{bad")).status, 400, `${path} bad json`);
+    }
   });
 });
 

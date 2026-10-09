@@ -1,8 +1,8 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statfsSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statfsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 
 const PROJECT_FILE = join(".tdk", "project.json");
@@ -126,13 +126,20 @@ function sameSecret(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// Never show the account name: the real home path and any other /Users/<name> become /Users/****.
+export function maskPaths(text) {
+  const home = homedir();
+  const masked = join(dirname(home), "****");
+  return text.split(home).join(masked).replace(/\/Users\/(?!\*{4})[^/\\"\s]+/g, "/Users/****");
+}
+
 function sendJson(response, status, data) {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
   });
-  response.end(JSON.stringify(data));
+  response.end(maskPaths(JSON.stringify(data)));
 }
 
 class HttpError extends Error {
@@ -162,6 +169,30 @@ async function readBody(request) {
     throw new HttpError(400, "Expected a JSON object.");
   }
   return value;
+}
+
+export const RESOURCE_TYPES = ["backend", "frontend", "worker", "mcp", "bring-your-own", "sdk"];
+export const PROJECT_TEMPLATES = ["restaurant", "saas", "erp", "user-management", "ecommerce", "example"];
+const NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
+const ID_RE = /^[a-z][a-z0-9-]{0,30}$/;
+
+function actionResult(result) {
+  return { ok: result.status === 0, timedOut: result.status == null, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-4000) };
+}
+
+// New projects may only be created inside the user's home folder or the temp dir.
+function allowedParent(parent) {
+  if (typeof parent !== "string" || parent.includes("\0")) return null;
+  if (parent === "~" || parent.startsWith("~/")) parent = join(homedir(), parent.slice(1));
+  if (!isAbsolute(parent)) return null;
+  try {
+    const real = realpathSync(parent);
+    if (!statSync(real).isDirectory()) return null;
+    const roots = [homedir(), tmpdir()].map((root) => { try { return realpathSync(root); } catch { return root; } });
+    return roots.some((root) => real === root || real.startsWith(root + sep)) ? real : null;
+  } catch {
+    return null;
+  }
 }
 
 // CLI-supplied names are passed as argv; a leading "-" would be parsed as a flag.
@@ -543,6 +574,72 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
         const result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
+      }
+      if (url.pathname === "/api/meta" && request.method === "GET") {
+        const home = homedir();
+        const roots = commonProjectScanRoots().filter((root) => existsSync(root));
+        const tilde = (path) => (path === home ? "~" : path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path);
+        return sendJson(response, 200, { defaultParent: tilde(roots.find((root) => root.startsWith(home)) ?? home), roots: roots.map(tilde), templates: PROJECT_TEMPLATES, resourceTypes: RESOURCE_TYPES });
+      }
+      if (url.pathname === "/api/resources" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const type = body.type ?? "backend";
+        if (!project || !NAME_RE.test(body.name ?? "") || !RESOURCE_TYPES.includes(type)) return sendJson(response, 400, { error: "Choose a project, a kebab-case resource name and a valid type." });
+        const args = ["resource", body.name, "--type", type, "--yes"];
+        for (const [flag, value, test] of [["--stack", body.stack, NAME_RE], ["--framework", body.framework, ID_RE], ["--language", body.language, ID_RE]]) {
+          if (value == null || value === "") continue;
+          if (typeof value !== "string" || !test.test(value)) return sendJson(response, 400, { error: `Invalid ${flag.slice(2)}.` });
+          args.push(flag, value);
+        }
+        if (body.port != null && body.port !== "") {
+          if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) return sendJson(response, 400, { error: "Invalid port." });
+          args.push("--port", String(body.port));
+        }
+        const result = actionResult(await runCommand(project, args, { timeoutMs: 300_000 }));
+        doctorCache.delete(project.id);
+        return sendJson(response, 200, result);
+      }
+      if (url.pathname === "/api/stacks" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const names = body.resources;
+        if (!project || !NAME_RE.test(body.name ?? "") || !Array.isArray(names) || !names.length || names.length > 30 || !names.every((name) => typeof name === "string" && NAME_RE.test(name))) {
+          return sendJson(response, 400, { error: "Choose a project, a kebab-case stack name and at least one resource." });
+        }
+        const result = actionResult(await runCommand(project, ["stack", body.name, "--resources", ...names, "--yes"], { timeoutMs: 120_000 }));
+        return sendJson(response, 200, result);
+      }
+      if (url.pathname === "/api/config" && request.method === "POST") {
+        const body = await readBody(request);
+        const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
+        const commands = { regenerate: ["config", "regenerate"], verify: ["project", "--check"] };
+        if (!project || typeof body.operation !== "string" || !Object.hasOwn(commands, body.operation)) return sendJson(response, 400, { error: "Choose a project and regenerate or verify." });
+        return sendJson(response, 200, actionResult(await runCommand(project, commands[body.operation], { timeoutMs: 120_000 })));
+      }
+      if (url.pathname === "/api/projects/create" && request.method === "POST") {
+        const body = await readBody(request);
+        const parent = allowedParent(body.parent);
+        const template = body.template == null || body.template === "" ? null : body.template;
+        if (!parent) return sendJson(response, 400, { error: "Choose an existing folder inside your home directory." });
+        if (!NAME_RE.test(body.name ?? "")) return sendJson(response, 400, { error: "Project name must be kebab-case, for example my-shop." });
+        if (template && !PROJECT_TEMPLATES.includes(template)) return sendJson(response, 400, { error: "Unknown template." });
+        const target = join(parent, body.name);
+        if (existsSync(target)) return sendJson(response, 409, { error: `${target} already exists.` });
+        let result;
+        if (template) {
+          result = actionResult(await runCommand({ root: parent }, ["project", template, "--path", target, "--yes"], { timeoutMs: 300_000 }));
+        } else {
+          mkdirSync(target);
+          result = actionResult(await runCommand({ root: target }, ["project", "--yes"], { timeoutMs: 120_000 }));
+          if (!result.ok) { try { rmdirSync(target); } catch {} }
+        }
+        if (result.ok && existsSync(join(target, PROJECT_FILE))) {
+          const [created] = resolveProjects(null, [target]);
+          if (!projects.some((entry) => entry.root === created.root)) projects.push(created);
+          return sendJson(response, 200, { ...result, project: { id: created.id, name: created.name, path: created.root } });
+        }
+        return sendJson(response, 200, { ...result, ok: false, output: result.output || "TDK did not create a project here." });
       }
       if (url.pathname === "/api/open" && request.method === "POST") {
         const body = await readBody(request);

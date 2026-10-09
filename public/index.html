@@ -475,6 +475,100 @@
       .ring { display: inline-block; line-height: 0; }
       .ring svg { position: static; display: block; }
       .ring text { fill: var(--label); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+      /* Icon rail: sidebar collapses to icons */
+      .app.rail { grid-template-columns: 68px minmax(0, 1fr); }
+      .project-item .project-symbol { display: none; }
+      .rail .brand { padding: 30px 0 0; justify-content: center; }
+      .rail .brand-name, .rail .local-mark, .rail .search, .rail .section-title, .rail .nav-label, .rail .project-item-name, .rail .sidebar-foot, .rail .nav-item .count { display: none; }
+      .rail .sidebar-tools { padding: 8px 0; }
+      .rail .side-nav, .rail .project-list { padding-inline: 12px; }
+      .rail .nav-item, .rail .project-item { justify-content: center; padding: 9px 0; }
+      .rail .project-item .project-symbol { display: grid; }
+      .app.rail .sidebar.ws-collapsed .project-list { display: block; }
+      .app.side-hidden { grid-template-columns: 258px minmax(0, 1fr); }
+      .app.side-hidden .sidebar { visibility: visible; }
+
+      /* Forms */
+      .form-modal { width: min(520px, 92vw); }
+      .form { display: grid; }
+      .form-body { display: grid; gap: 14px; padding: 18px; max-height: 70vh; overflow: auto; }
+      .form-intro { margin: 0; color: var(--secondary); font-size: 14px; }
+      .field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--secondary); }
+      .field input[type="text"], .field input[type="number"], .field select { height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--label); font: 400 14px var(--sans); }
+      .field input:focus, .field select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+      .field small { font-weight: 400; color: var(--tertiary); }
+      .checks { display: grid; gap: 6px; max-height: 190px; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+      .checks label { display: flex; align-items: center; gap: 8px; font-weight: 400; color: var(--label); font-size: 14px; }
+      .form-error { padding: 10px 12px; border-radius: 10px; background: var(--red-wash); color: var(--label); font-size: 13px; border: 1px solid color-mix(in srgb, var(--red) 40%, var(--line)); }
+      .form-output { margin: 0; padding: 10px 12px; max-height: 200px; overflow: auto; border-radius: 10px; background: var(--surface-alt); color: var(--label); font: 12px/1.5 var(--mono); white-space: pre-wrap; }
+      .form-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--line); }
+      .head-actions, .panel-right .button { display: inline-flex; gap: 8px; }
+      .panel-right { display: inline-flex; align-items: center; gap: 8px; }
+      .page-head { align-items: flex-start; }
+      .hidden-note { color: var(--secondary); font-size: 13px; margin-top: 8px; }
+      .hidden-note button { border: 0; background: none; color: var(--accent); font: inherit; padding: 0; }
+
+      /* ===== macOS-style controls: push buttons, segmented groups, search field ===== */
+      :root { --btn-top: rgba(255, 255, 255, .95); --btn-bot: rgba(255, 255, 255, .72); --btn-edge: rgba(0, 0, 0, .16); --btn-shadow: 0 1px 1.5px rgba(0, 0, 0, .12); --btn-hi: inset 0 1px 0 rgba(255, 255, 255, .85); --press: rgba(0, 0, 0, .06);
+        --p-top: #4aa3ff; --p-bot: #0a7aff; --p-edge: rgba(0, 62, 160, .65); --ring-a: #8e8e93; --ring-b: #aeaeb2; }
+      @media (prefers-color-scheme: dark) { :root { --btn-top: rgba(255, 255, 255, .17); --btn-bot: rgba(255, 255, 255, .09); --btn-edge: rgba(255, 255, 255, .16); --btn-shadow: 0 1px 2px rgba(0, 0, 0, .35); --btn-hi: inset 0 1px 0 rgba(255, 255, 255, .14); --press: rgba(0, 0, 0, .25);
+        --p-top: #3d9bff; --p-bot: #0a74f0; --p-edge: rgba(0, 0, 0, .4); } }
+      .button, .native .button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; min-height: 30px; padding: 0 12px; border: 0; border-radius: 8px; color: var(--label); font: 500 13px/1 var(--sans); letter-spacing: -.003em; white-space: nowrap; user-select: none; -webkit-user-select: none;
+        background: linear-gradient(180deg, var(--btn-top), var(--btn-bot)); box-shadow: 0 0 0 .5px var(--btn-edge), var(--btn-shadow), var(--btn-hi); backdrop-filter: none;
+        transition: transform .09s cubic-bezier(.2, .8, .3, 1), box-shadow .12s ease, filter .12s ease, background .12s ease; }
+      .button:hover, .native .button:hover { filter: brightness(1.04) saturate(1.05); background: linear-gradient(180deg, var(--btn-top), var(--btn-bot)); }
+      .button:active:not(:disabled), .native .button:active:not(:disabled) { transform: scale(.965); filter: brightness(.93); box-shadow: 0 0 0 .5px var(--btn-edge), inset 0 1px 3px var(--press); }
+      .button:focus-visible { outline: none; box-shadow: 0 0 0 .5px var(--btn-edge), 0 0 0 3.5px color-mix(in srgb, var(--accent) 50%, transparent); }
+      .button:disabled { opacity: .42; cursor: default; filter: none; transform: none; }
+      .btn-icon { width: 14px; height: 14px; flex: none; opacity: .88; }
+      .button.primary, .native .button.primary { color: #fff; background: linear-gradient(180deg, var(--p-top), var(--p-bot)); box-shadow: 0 0 0 .5px var(--p-edge), 0 1px 2px rgba(0, 70, 200, .35), inset 0 1px 0 rgba(255, 255, 255, .32); }
+      .button.primary:hover { filter: brightness(1.07); }
+      .button.danger, .native .button.danger { color: var(--red); }
+      .button.quiet, .native .button.quiet { background: transparent; box-shadow: none; color: var(--secondary); }
+      .button.quiet:hover { background: var(--press); filter: none; }
+      .stack-quick .button.primary, .resource-actions .button.primary { color: #fff; background: linear-gradient(180deg, var(--p-top), var(--p-bot)); }
+      .row-actions, .resource-actions { display: inline-flex; gap: 6px; }
+      .row-actions .button, .resource-actions .button, .stack-quick .button { height: 28px; min-height: 28px; padding: 0 10px; font-size: 13px; }
+      /* Segmented Start / Stop / Restart */
+      .row-actions { gap: 0; border-radius: 8px; box-shadow: 0 1px 1.5px rgba(0, 0, 0, .1); }
+      .row-actions .button { border-radius: 0; box-shadow: inset -.5px 0 0 var(--btn-edge), inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 0 transparent; }
+      .row-actions .button:first-child { border-radius: 8px 0 0 8px; box-shadow: 0 0 0 .5px var(--btn-edge), var(--btn-hi); }
+      .row-actions .button:last-child { border-radius: 0 8px 8px 0; box-shadow: 0 0 0 .5px var(--btn-edge), var(--btn-hi); }
+      .row-actions .button.primary:first-child { box-shadow: 0 0 0 .5px var(--p-edge), inset 0 1px 0 rgba(255, 255, 255, .32); }
+      .detail-actions { gap: 8px; }
+      /* Search field like NSSearchField */
+      .search { position: relative; display: block; }
+      .search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--tertiary); pointer-events: none; }
+      .search input, .native .search input { width: 100%; height: 32px; padding: 0 12px 0 32px; border: 0; border-radius: 8px; font: 400 13px var(--sans); color: var(--label); background: var(--press); box-shadow: inset 0 0 0 .5px var(--line), inset 0 1px 2px rgba(0, 0, 0, .08); }
+      .search input:focus { outline: none; background: var(--surface); box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 45%, transparent), inset 0 0 0 .5px var(--accent); }
+      .nav-item svg { width: 16px; height: 16px; flex: none; }
+      .nav-item, .project-item { gap: 10px; align-items: center; min-height: 32px; }
+
+      /* ===== macOS-style charts ===== */
+      .ring.good { --ring-a: #30d158; --ring-b: #7ee89a; }
+      .ring.warn { --ring-a: #ff9f0a; --ring-b: #ffcc4d; }
+      .ring.bad { --ring-a: #ff453a; --ring-b: #ff8a80; }
+      .ring.none { --ring-a: #8e8e93; --ring-b: #aeaeb2; }
+      .ring-fill { filter: drop-shadow(0 0 3px color-mix(in srgb, var(--ring-a) 45%, transparent)); transition: stroke-dasharray .6s cubic-bezier(.2, .8, .3, 1); }
+      .ring-track { stroke: var(--track); }
+      .ring-num { fill: var(--label); font-family: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+      .ring-sub { fill: var(--secondary); font-weight: 500; }
+      .gauges { gap: 14px; }
+      .gauge { display: grid; justify-items: center; gap: 4px; padding: 20px 16px 18px; text-align: center; border-radius: 20px; }
+      .gauge .ring { margin-bottom: 8px; }
+      .gauge strong { font-size: 14px; font-weight: 600; }
+      .gauge span { font-size: 12.5px; color: var(--secondary); margin: 0; }
+      .bar { height: 10px; gap: 2px; background: var(--track); border-radius: 6px; max-width: none; }
+      .bar i { border-radius: 3px; min-width: 8px; }
+      .bar i:first-child { border-radius: 6px 3px 3px 6px; } .bar i:last-child { border-radius: 3px 6px 6px 3px; } .bar i:only-child { border-radius: 6px; }
+      .bar .pass { background: linear-gradient(90deg, #30d158, #5fe383); } .bar .warning { background: linear-gradient(90deg, #ff9f0a, #ffc145); } .bar .fail { background: linear-gradient(90deg, #ff453a, #ff7a70); }
+      .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--secondary); }
+      .legend span { display: inline-flex; align-items: center; gap: 6px; }
+      .legend i { width: 8px; height: 8px; border-radius: 50%; }
+      .legend .pass { background: #30d158; } .legend .warning { background: #ff9f0a; } .legend .fail { background: #ff453a; }
+      .doctor-summary { align-items: center; }
+      .doctor-meta { gap: 8px; }
     </style>
   </head>
   <body>
@@ -485,7 +579,7 @@
         <div class="sidebar-tools">
           <label class="search"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.8" cy="8.8" r="5.8" stroke="currentColor" stroke-width="1.5"/><path d="m13.2 13.2 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input id="search" type="search" placeholder="Filter projects" autocomplete="off" /></label>
         </div>
-        <nav class="side-nav"><button id="overview-nav" class="nav-item active" type="button"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="11.3" y="2.5" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="2.5" y="11.3" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="11.3" y="11.3" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/></svg>Overview<span id="nav-count" class="count">—</span></button></nav>
+        <nav class="side-nav"><button id="overview-nav" class="nav-item active" type="button" title="Overview"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="2.5" y="2.5" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="11.3" y="2.5" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="2.5" y="11.3" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/><rect x="11.3" y="11.3" width="6.2" height="6.2" rx="1.4" stroke="currentColor" stroke-width="1.4"/></svg><span class="nav-label">Overview</span><span id="nav-count" class="count">—</span></button><button id="new-project-nav" class="nav-item" type="button" title="New project"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="nav-label">New project</span></button></nav>
         <button id="ws-toggle" class="section-title section-toggle" type="button" aria-expanded="true"><svg class="chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 3 5 5-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Workspaces <span id="side-count" class="count">—</span></button>
         <div id="project-list" class="project-list"><div class="skel-side" aria-label="Finding projects"><i></i><i></i><i></i><i></i></div></div>
         <div class="sidebar-foot">Local projects · refreshes every 7 seconds</div>
@@ -495,6 +589,7 @@
         <main id="content" class="content"><div class="content-inner" aria-busy="true" aria-label="Loading local projects"><div class="skel-title"></div><div class="skel-sub"></div><div class="skel-row"></div><div class="skel-row"></div><div class="skel-row"></div></div></main>
       </section>
     </div>
+    <dialog class="modal form-modal" id="form-dialog"></dialog>
     <dialog class="modal" id="logs"><div class="modal-head"><h2 id="log-title">Recent logs</h2><button class="button quiet" id="close-logs" type="button">Close</button></div><pre id="log-body">Loading…</pre></dialog>
     <script src="/app.js" defer></script>
   </body>
