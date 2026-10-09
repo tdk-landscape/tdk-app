@@ -328,7 +328,23 @@
       .modal { border-radius: 12px; }
       .modal-head h2 { font: 600 15px var(--sans); }
       .modal pre { font: 13px/1.6 var(--mono); color: var(--label); }
-      @media (max-width: 840px) { .project-row { grid-template-columns: minmax(180px, 1fr) 110px auto; } }
+      /* Doctor score */
+      .score { justify-self: start; min-width: 58px; display: inline-flex; align-items: baseline; justify-content: center; gap: 1px; padding: 4px 10px; border-radius: 999px; font: 600 15px var(--sans); border: 1px solid var(--line); background: var(--surface-alt); color: var(--secondary); }
+      .score small { font-size: 11px; font-weight: 500; opacity: .75; }
+      .score.good { background: var(--green-wash); color: var(--green); border-color: color-mix(in srgb, var(--green) 40%, var(--line)); }
+      .score.warn { background: var(--amber-wash); color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
+      .score.bad { background: var(--red-wash); color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--line)); }
+      .doctor-box { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px 16px; display: grid; gap: 10px; font-size: 14px; color: var(--secondary); }
+      .doctor-summary { display: flex; align-items: center; gap: 12px; color: var(--label); }
+      .doctor-item { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line-soft); background: var(--surface-alt); }
+      .doctor-item strong { color: var(--label); font-weight: 600; }
+      .doctor-item.fail { border-left: 3px solid var(--red); }
+      .doctor-item.warning { border-left: 3px solid var(--amber); }
+      .doctor-item.pass { border-left: 3px solid var(--green); }
+      .doctor-item span { white-space: pre-wrap; }
+      .doctor-item code { font: 12px/1.5 var(--mono); color: var(--label); white-space: pre-wrap; }
+      .project-row { grid-template-columns: minmax(200px, 1.5fr) 110px 92px minmax(110px, .7fr) auto; }
+      @media (max-width: 840px) { .project-row { grid-template-columns: minmax(180px, 1fr) 92px auto; } .project-row > .status-label { display: none; } }
     </style>
   </head>
   <body>

@@ -300,6 +300,35 @@ async function projectStatus(project, execute) {
   };
 }
 
+// Turns `tdk doctor --json` data into a 0-100 score: pass = 1, warning = 0.5, fail = 0, skipped ignored.
+export function summarizeDoctor(data) {
+  const raw = data && typeof data === "object" && Array.isArray(data.checks) ? data.checks : [];
+  const checks = raw.filter((check) => check && typeof check === "object").map((check) => ({
+    name: typeof check.name === "string" ? check.name : "Unnamed check",
+    status: check.isSkipped ? "skipped" : check.didPass ? "pass" : check.isWarning ? "warning" : "fail",
+    message: typeof check.message === "string" ? check.message : "",
+    fix: typeof check.fix === "string" ? check.fix : "",
+  }));
+  const counted = checks.filter((check) => check.status !== "skipped");
+  const points = counted.reduce((sum, check) => sum + (check.status === "pass" ? 1 : check.status === "warning" ? 0.5 : 0), 0);
+  return {
+    score: counted.length ? Math.round((points / counted.length) * 100) : null,
+    passed: counted.filter((check) => check.status === "pass").length,
+    warnings: counted.filter((check) => check.status === "warning").length,
+    failed: counted.filter((check) => check.status === "fail").length,
+    total: counted.length,
+    ready: Boolean(data?.ready),
+    checks,
+  };
+}
+
+export const DOCKER_UNAVAILABLE = "Docker isn't responding. Open Docker Desktop (or quit and reopen it if it is stuck), wait until it says it is running, then try again.";
+
+export async function checkDocker(execute = runTdk) {
+  const result = await execute({ root: homedir() }, ["info", "--format", "{{.ServerVersion}}"], { binary: process.env.DOCKER_BIN || "docker", timeoutMs: 8000 });
+  return result.status === 0;
+}
+
 function safeUrl(value) {
   if (typeof value !== "string") return null;
   try {
@@ -322,10 +351,30 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath }) {
+export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
   let updating = false;
+  const doctorCache = new Map();
+  const DOCTOR_TTL_MS = 120_000;
+  const loadDoctor = (project, force) => {
+    const cached = doctorCache.get(project.id);
+    if (cached && !force && (cached.pending || Date.now() - cached.at < DOCTOR_TTL_MS)) return cached.promise;
+    const entry = { at: Date.now(), pending: true };
+    entry.promise = (async () => {
+      try {
+        const data = readMachine(await runCommand(project, ["doctor", "--json", "--no-ping"], { timeoutMs: 45_000 }));
+        return { ...summarizeDoctor(data), at: new Date().toISOString() };
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error), at: new Date().toISOString() };
+      } finally {
+        entry.pending = false;
+        entry.at = Date.now();
+      }
+    })();
+    doctorCache.set(project.id, entry);
+    return entry.promise;
+  };
   // Cache only a positive result so installing or updating the CLI is picked up on the next load.
   const cliCapability = async () => {
     if (capability?.lifecycle) return capability;
@@ -383,6 +432,11 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
           updating = false;
         }
       }
+      if (url.pathname === "/api/doctor" && request.method === "GET") {
+        const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
+        if (!project) return sendJson(response, 400, { error: "Select a project." });
+        return sendJson(response, 200, await loadDoctor(project, url.searchParams.get("refresh") === "1"));
+      }
       if (url.pathname === "/api/projects" && request.method === "GET") {
         // One broken project must not take the whole dashboard down.
         const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand).catch((error) => ({
@@ -428,6 +482,8 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
         const scoped = hasStack || Boolean(body.resources?.length);
         // `tdk down` has no scope, so stop and restart act on the whole project.
         if (scoped && body.operation !== "start") return sendJson(response, 400, { error: "TDK can only stop or restart a whole project. Start accepts a stack or resources." });
+        const dockerOk = await Promise.resolve(dockerCheck()).catch(() => false);
+        if (!dockerOk) return sendJson(response, 503, { error: DOCKER_UNAVAILABLE, code: "docker_unavailable" });
         const up = ["up", "--json"];
         if (hasStack) up.push(body.stack);
         if (body.resources?.length) up.push("--only", ...body.resources);

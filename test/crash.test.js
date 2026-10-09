@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { discoverProjects, probeCli, resolveProjects, runTdk, startAppServer } from "../src/app.js";
+import { checkDocker, discoverProjects, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -38,6 +38,7 @@ async function boot(options = {}) {
     probe: async () => supported,
     runCommand: async () => goodStatus,
     openPath: async () => {},
+    dockerCheck: async () => true,
     ...options,
   });
   servers.push(started.server);
@@ -409,6 +410,92 @@ describe("CLI self-update endpoint", () => {
   it("is POST only", async () => {
     const { server } = await boot();
     assert.equal((await raw(server, { path: "/api/cli/update" })).status, 404);
+  });
+});
+
+describe("doctor scores", () => {
+  const report = (checks, ready = true) => ({ status: 0, stderr: "", stdout: JSON.stringify({ schemaVersion: 1, data: { ready, inProject: true, checks } }) });
+  const pass = (name) => ({ name, didPass: true, message: "ok" });
+  const warn = (name) => ({ name, didPass: false, isWarning: true, message: "careful", fix: "do x" });
+  const fail = (name) => ({ name, didPass: false, message: "broken", fix: "do y" });
+
+  it("scores pass=1, warning=0.5, fail=0 and ignores skipped checks", () => {
+    const summary = summarizeDoctor({ ready: false, checks: [pass("a"), pass("b"), warn("c"), fail("d"), { name: "e", isSkipped: true, didPass: false }] });
+    assert.equal(summary.score, 63);
+    assert.deepEqual([summary.passed, summary.warnings, summary.failed, summary.total], [2, 1, 1, 4]);
+    assert.equal(summary.checks.find((check) => check.name === "e").status, "skipped");
+  });
+
+  it("returns a null score instead of crashing for empty or malformed reports", () => {
+    for (const data of [null, undefined, 5, "x", [], {}, { checks: "no" }, { checks: [null, 1, "x", []] }, { checks: [{}] }]) {
+      const summary = summarizeDoctor(data);
+      assert(summary.score === null || typeof summary.score === "number");
+      assert(Array.isArray(summary.checks));
+    }
+  });
+
+  it("serves /api/doctor and caches it so refreshes do not rerun the CLI", async () => {
+    const calls = [];
+    const { server } = await boot({ runCommand: async (project, args) => { calls.push(args); return report([pass("docker"), fail("ports")], false); } });
+    const first = await raw(server, { path: "/api/doctor?project=a" });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.score, 50);
+    assert.equal(first.json.failed, 1);
+    await raw(server, { path: "/api/doctor?project=a" });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0], ["doctor", "--json", "--no-ping"]);
+    await raw(server, { path: "/api/doctor?project=a&refresh=1" });
+    assert.equal(calls.length, 2);
+  });
+
+  it("runs doctor once for concurrent requests", async () => {
+    let calls = 0;
+    const { server } = await boot({ runCommand: async () => { calls += 1; await new Promise((resolve) => setTimeout(resolve, 50)); return report([pass("a")]); } });
+    await Promise.all(Array.from({ length: 10 }, () => raw(server, { path: "/api/doctor?project=a" })));
+    assert.equal(calls, 1);
+  });
+
+  it("reports a doctor failure or hang as an error payload, not a 500", async () => {
+    for (const result of [{ status: null, stdout: "", stderr: "" }, { status: 1, stdout: "garbage", stderr: "boom" }, { status: 0, stdout: "null", stderr: "" }]) {
+      const { server } = await boot({ runCommand: async () => result });
+      const response = await raw(server, { path: "/api/doctor?project=a" });
+      assert.equal(response.status, 200);
+      assert(response.json.error);
+    }
+    const { server } = await boot({ runCommand: async () => { throw new Error("spawn exploded"); } });
+    assert.match((await raw(server, { path: "/api/doctor?project=a" })).json.error, /spawn exploded/);
+  });
+
+  it("rejects unknown projects and needs the token", async () => {
+    const { server } = await boot();
+    assert.equal((await raw(server, { path: "/api/doctor?project=zzz" })).status, 400);
+    assert.equal((await raw(server, { path: "/api/doctor" })).status, 400);
+    assert.equal((await raw(server, { path: "/api/doctor?project=a", auth: false })).status, 403);
+  });
+});
+
+describe("Docker preflight", () => {
+  it("refuses start, stop and restart with a clear 503 when Docker is not responding, without running the CLI", async () => {
+    const calls = [];
+    const { server } = await boot({ dockerCheck: async () => false, runCommand: async (_p, args) => { calls.push(args); return okEnvelope({}); } });
+    for (const operation of ["start", "stop", "restart"]) {
+      const response = await post(server, "/api/actions", { project: "a", operation });
+      assert.equal(response.status, 503, operation);
+      assert.equal(response.json.code, "docker_unavailable");
+      assert.match(response.json.error, /Docker/);
+    }
+    assert.equal(calls.length, 0);
+  });
+
+  it("treats a throwing Docker check as unavailable", async () => {
+    const { server } = await boot({ dockerCheck: async () => { throw new Error("x"); } });
+    assert.equal((await post(server, "/api/actions", { project: "a", operation: "start" })).status, 503);
+  });
+
+  it("checkDocker is false for a missing binary and a hung or failing one", async () => {
+    assert.equal(await checkDocker(async () => ({ status: null, stdout: "", stderr: "ENOENT" })), false);
+    assert.equal(await checkDocker(async () => ({ status: 1, stdout: "", stderr: "daemon not running" })), false);
+    assert.equal(await checkDocker(async () => ({ status: 0, stdout: "27.0.1", stderr: "" })), true);
   });
 });
 

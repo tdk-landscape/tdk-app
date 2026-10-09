@@ -94,6 +94,7 @@ function renderOverview() {
     return `<div class="project-row">
       <button class="project-open" type="button" data-select-project="${esc(project.id)}">${symbolMarkup(project.name)}<span class="row-title"><strong>${esc(project.name)}</strong><small>${esc(project.path)}</small></span></button>
       ${project.error ? `<span class="status-label"><i class="state-dot error"></i>Unavailable</span>` : statusMarkup(project.tiltRunning ? "running" : "stopped")}
+      ${scoreMarkup(project)}
       <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` · ${conflicts} port conflicts` : ""}`}</span>
       ${actionSet(project, "project", "", true)}
     </div>`;
@@ -144,6 +145,7 @@ function renderDetail(project) {
       <div class="detail-actions">${actionSet(project)}<button class="button" type="button" data-action="open-project" data-project="${esc(project.id)}">Open folder</button><button class="button" type="button" data-action="open-terminal" data-project="${esc(project.id)}">Open terminal</button></div></div>
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
+    ${doctorSection(project)}
     <div class="section-label"><span>Stacks & resources</span><span>${resources.length} total</span></div>
     <div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>
   </div>`;
@@ -163,7 +165,55 @@ function render() {
   if (selected) renderDetail(selected);
   else renderOverview();
   applyCliCapability();
+  applyActiveNotice();
+  applyBusy();
   content.scrollTop = scrollTop;
+}
+
+const doctors = new Map();
+let doctorRunning = false;
+let activeNotice = null;
+const busy = new Set();
+
+function scoreClass(score) {
+  if (score == null) return "none";
+  return score >= 90 ? "good" : score >= 60 ? "warn" : "bad";
+}
+
+function scoreMarkup(project) {
+  const result = doctors.get(project.id);
+  if (!result) return `<span class="score none" title="Running tdk doctor…">…</span>`;
+  if (result.error) return `<span class="score none" title="${esc(`Doctor failed: ${result.error}`)}">—</span>`;
+  return `<span class="score ${scoreClass(result.score)}" title="${esc(`${result.passed} passed, ${result.warnings} warnings, ${result.failed} failed`)}">${result.score ?? "—"}<small>/100</small></span>`;
+}
+
+// Runs doctor one project at a time so a stuck Docker cannot spawn many hung checks.
+async function loadDoctors(force = false) {
+  if (doctorRunning) return;
+  doctorRunning = true;
+  try {
+    for (const project of projects) {
+      if (!force && doctors.has(project.id)) continue;
+      try {
+        doctors.set(project.id, await api(`/api/doctor?project=${encodeURIComponent(project.id)}${force ? "&refresh=1" : ""}`));
+      } catch (error) {
+        doctors.set(project.id, { error: error.message });
+      }
+      render();
+    }
+  } finally {
+    doctorRunning = false;
+  }
+}
+
+function doctorSection(project) {
+  const result = doctors.get(project.id);
+  const head = `<div class="section-label"><span>Doctor</span><button class="button" type="button" data-action="doctor-refresh" data-project="${esc(project.id)}">Run again</button></div>`;
+  if (!result) return `${head}<div class="doctor-box">Running tdk doctor…</div>`;
+  if (result.error) return `${head}<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`;
+  const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
+  const list = issues.length ? issues.map((check) => `<div class="doctor-item ${check.status}"><strong>${esc(check.name)}</strong><span>${esc(check.message)}</span>${check.fix ? `<code>${esc(check.fix)}</code>` : ""}</div>`).join("") : `<div class="doctor-item pass"><strong>All ${result.total} checks passed</strong></div>`;
+  return `${head}<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project)}<span>${result.passed} passed · ${result.warnings} warnings · ${result.failed} failed</span></div>${list}</div>`;
 }
 
 const updateState = { running: false, message: "" };
@@ -211,19 +261,44 @@ async function refreshData() {
     projects = response.projects || [];
     if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) selectedProjectId = null;
     render();
+    void loadDoctors();
   } catch (error) {
     content.innerHTML = `<div class="content-inner"><div class="empty"><span class="empty-icon">!</span><strong>Couldn’t load projects</strong><p>${esc(error.message)}</p><button class="button" type="button" id="retry">Try again</button></div></div>`;
     document.querySelector("#retry")?.addEventListener("click", refreshData);
   }
 }
 
-function showNotice(message, isError = false) {
-  const noticeElement = document.querySelector("#notice");
-  if (!noticeElement) return;
-  noticeElement.textContent = message;
-  noticeElement.classList.toggle("error", isError);
-  noticeElement.classList.add("show");
-  setTimeout(() => noticeElement.classList.remove("show"), 6500);
+let noticeTimer = null;
+
+function applyActiveNotice() {
+  const element = document.querySelector("#notice");
+  if (!element || !activeNotice) return;
+  element.textContent = activeNotice.message;
+  element.classList.toggle("error", activeNotice.isError);
+  element.classList.add("show");
+}
+
+// Sticky notices (in-progress work) stay until replaced; others clear after a few seconds.
+function showNotice(message, isError = false, sticky = false) {
+  clearTimeout(noticeTimer);
+  activeNotice = { message, isError };
+  applyActiveNotice();
+  if (!sticky) {
+    noticeTimer = setTimeout(() => {
+      activeNotice = null;
+      document.querySelector("#notice")?.classList.remove("show");
+    }, 9000);
+  }
+}
+
+function applyBusy() {
+  for (const button of document.querySelectorAll('[data-action="start"], [data-action="stop"], [data-action="restart"]')) {
+    if (busy.has(button.dataset.project)) {
+      button.disabled = true;
+      if (button.dataset.action === "start" || button.dataset.action === "restart") button.textContent = button.dataset.action === "start" ? "Starting…" : "Restarting…";
+      else button.textContent = "Stopping…";
+    }
+  }
 }
 
 async function handleAction(button) {
@@ -250,7 +325,19 @@ async function handleAction(button) {
     return;
   }
 
-  button.disabled = true;
+  if (action === "doctor-refresh") {
+    doctors.delete(project);
+    render();
+    try { doctors.set(project, await api(`/api/doctor?project=${encodeURIComponent(project)}&refresh=1`)); } catch (error) { doctors.set(project, { error: error.message }); }
+    render();
+    return;
+  }
+
+  busy.add(project);
+  const verb = { start: "Starting", stop: "Stopping", restart: "Restarting" }[action];
+  const target = scope === "project" ? projects.find((entry) => entry.id === project)?.name || "project" : name;
+  showNotice(`${verb} ${target}… this can take a few minutes while Docker pulls and starts containers.`, false, true);
+  applyBusy();
   try {
     const payload = { project, operation: action };
     if (scope === "stack") payload.stack = name;
@@ -261,7 +348,8 @@ async function handleAction(button) {
   } catch (error) {
     showNotice(error.message, true);
   } finally {
-    button.disabled = false;
+    busy.delete(project);
+    render();
   }
 }
 

@@ -22,7 +22,7 @@ function projectFixture(name) {
 }
 
 async function serverFor(options) {
-  const started = await startAppServer({ port: 0, token: "test-session-token", ...options });
+  const started = await startAppServer({ port: 0, token: "test-session-token", dockerCheck: async () => true, ...options });
   servers.push(started.server);
   return started;
 }
