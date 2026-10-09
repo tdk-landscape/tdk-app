@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { checkDocker, discoverProjects, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
+import { checkDocker, discoverProjects, lowDiskNote, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -485,6 +485,12 @@ describe("Docker preflight", () => {
       assert.match(response.json.error, /Docker/);
     }
     assert.equal(calls.length, 0);
+  });
+
+  it("lowDiskNote warns only when free space is below the threshold and never throws", () => {
+    assert.equal(lowDiskNote(tmpdir(), 0), "");
+    assert.match(lowDiskNote(tmpdir(), 1e9), /GB free/);
+    assert.equal(lowDiskNote("/definitely/not/a/path"), "");
   });
 
   it("treats a throwing Docker check as unavailable", async () => {

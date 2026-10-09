@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statfsSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -324,6 +324,17 @@ export function summarizeDoctor(data) {
 
 export const DOCKER_UNAVAILABLE = "Docker isn't responding. Open Docker Desktop (or quit and reopen it if it is stuck), wait until it says it is running, then try again.";
 
+// A nearly full disk is the most common reason Docker Desktop's engine stops answering.
+export function lowDiskNote(path = homedir(), thresholdGb = 5) {
+  try {
+    const stats = statfsSync(path);
+    const freeGb = (stats.bavail * stats.bsize) / 1024 ** 3;
+    return freeGb < thresholdGb ? ` Your disk has only ${freeGb.toFixed(1)} GB free, which is the most likely cause. Free some space first (for example with \`docker system prune\` once Docker responds, or by deleting large files).` : "";
+  } catch {
+    return "";
+  }
+}
+
 export async function checkDocker(execute = runTdk) {
   const result = await execute({ root: homedir() }, ["info", "--format", "{{.ServerVersion}}"], { binary: process.env.DOCKER_BIN || "docker", timeoutMs: 8000 });
   return result.status === 0;
@@ -483,7 +494,7 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
         // `tdk down` has no scope, so stop and restart act on the whole project.
         if (scoped && body.operation !== "start") return sendJson(response, 400, { error: "TDK can only stop or restart a whole project. Start accepts a stack or resources." });
         const dockerOk = await Promise.resolve(dockerCheck()).catch(() => false);
-        if (!dockerOk) return sendJson(response, 503, { error: DOCKER_UNAVAILABLE, code: "docker_unavailable" });
+        if (!dockerOk) return sendJson(response, 503, { error: `${DOCKER_UNAVAILABLE}${lowDiskNote()}`, code: "docker_unavailable" });
         const up = ["up", "--json"];
         if (hasStack) up.push(body.stack);
         if (body.resources?.length) up.push("--only", ...body.resources);
