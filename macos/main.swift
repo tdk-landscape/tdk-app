@@ -16,7 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let config = WKWebViewConfiguration()
+        // Lets the page switch to its translucent theme only inside the native window.
+        config.userContentController.addUserScript(WKUserScript(source: "document.documentElement.classList.add('native')", injectionTime: .atDocumentStart, forMainFrameOnly: true))
         webView = WKWebView(frame: .zero, configuration: config)
+        webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = self
         webView.uiDelegate = self
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
@@ -26,7 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         // Content runs under the (transparent) title bar; a thin strip keeps the window draggable.
-        let container = NSView()
+        let container = NSVisualEffectView()
+        container.material = .underWindowBackground
+        container.blendingMode = .behindWindow
+        container.state = .active
+        window.isOpaque = false
+        window.backgroundColor = .clear
         webView.translatesAutoresizingMaskIntoConstraints = false
         let strip = DragStrip()
         strip.translatesAutoresizingMaskIntoConstraints = false

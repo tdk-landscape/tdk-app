@@ -344,6 +344,32 @@
       .doctor-item span { white-space: pre-wrap; }
       .doctor-item code { font: 12px/1.5 var(--mono); color: var(--label); white-space: pre-wrap; }
       .project-row { grid-template-columns: minmax(200px, 1.5fr) 110px 92px minmax(110px, .7fr) auto; }
+      /* Native window: let macOS vibrancy show through, with frosted glass panels */
+      html.native, html.native body { background: transparent; }
+      html.native { --glass: rgba(255, 255, 255, .55); --glass-strong: rgba(255, 255, 255, .72); --glass-line: rgba(255, 255, 255, .6); --glass-shadow: 0 1px 2px rgba(20, 20, 19, .06), 0 10px 30px rgba(20, 20, 19, .08); --side-glass: rgba(246, 244, 238, .38); }
+      @media (prefers-color-scheme: dark) {
+        html.native { --glass: rgba(255, 255, 255, .08); --glass-strong: rgba(255, 255, 255, .13); --glass-line: rgba(255, 255, 255, .14); --glass-shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 12px 32px rgba(0, 0, 0, .28); --side-glass: rgba(20, 20, 22, .30); }
+      }
+      .native .sidebar { background: var(--side-glass); border-right: 1px solid var(--glass-line); backdrop-filter: blur(30px) saturate(1.6); -webkit-backdrop-filter: blur(30px) saturate(1.6); }
+      .native .search input { background: var(--glass); border-color: var(--glass-line); }
+      .native .nav-item.active, .native .project-item.active { background: var(--glass-strong); box-shadow: 0 0 0 1px var(--glass-line), var(--glass-shadow); }
+      .native .nav-item:hover, .native .project-item:hover { background: var(--glass); }
+      .native .project-row, .native .stack, .native .doctor-box, .native .notice, .native .conflicts, .native .empty, .native .modal { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 16px; box-shadow: var(--glass-shadow); backdrop-filter: blur(24px) saturate(1.5); -webkit-backdrop-filter: blur(24px) saturate(1.5); }
+      .native .project-row:hover { background: var(--glass-strong); border-color: var(--glass-line); }
+      .native .notice.error { background: color-mix(in srgb, var(--red-wash) 80%, transparent); }
+      .native .doctor-item { background: var(--glass); border-color: var(--glass-line); }
+      .native .resource-row { border-bottom-color: var(--glass-line); }
+      .native .resource-list, .native .stack-head { background: transparent; }
+      .native .button { background: var(--glass); border-color: var(--glass-line); backdrop-filter: blur(12px); border-radius: 10px; }
+      .native .button:hover { background: var(--glass-strong); }
+      .native .button.primary { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent)); border-color: transparent; color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+      @media (prefers-color-scheme: dark) { .native .button.primary { color: #1b1a19; } }
+      .native .button.quiet { background: transparent; border-color: transparent; }
+      .native .project-symbol { border-radius: 12px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 28%, transparent), color-mix(in srgb, var(--accent) 10%, transparent)); }
+      .native .score { backdrop-filter: blur(10px); }
+      .native .brand-mark { background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 85%, #fff), var(--accent)); border-radius: 9px; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 35%, transparent); }
+      .native ::-webkit-scrollbar { width: 10px; }
+      .native ::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, .35); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
       @media (max-width: 840px) { .project-row { grid-template-columns: minmax(180px, 1fr) 92px auto; } .project-row > .status-label { display: none; } }
     </style>
   </head>
