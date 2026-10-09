@@ -170,6 +170,10 @@ async function readBody(request) {
   return value;
 }
 
+// Commands behind the config panel. Only these fixed argv lists can run, whatever the request says.
+export const CONFIG_COMMANDS = { regenerate: ["config", "regenerate"], verify: ["config", "verify"], migrate: ["config", "migrate"] };
+export const CONFIG_LOG_LIMIT = 200;
+
 export const RESOURCE_TYPES = ["backend", "frontend", "worker", "mcp", "bring-your-own", "sdk"];
 export const PROJECT_TEMPLATES = ["restaurant", "saas", "erp", "user-management", "ecommerce", "example"];
 const NAME_RE = /^[a-z][a-z0-9-]{0,62}$/;
@@ -443,6 +447,8 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
   let capability = null;
   let updating = false;
   let restartingDocker = false;
+  const configLogs = [];
+  const lastVerify = new Map();
   // Stale-while-revalidate status cache: answers instantly after the first load, refreshes in the background.
   const statusCache = new Map();
   const STATUS_FRESH_MS = 4000;
@@ -688,9 +694,24 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
       if (url.pathname === "/api/config" && request.method === "POST") {
         const body = await readBody(request);
         const project = typeof body.project === "string" ? projects.find((entry) => entry.id === body.project) : null;
-        const commands = { regenerate: ["config", "regenerate"], verify: ["project", "--check"] };
-        if (!project || typeof body.operation !== "string" || !Object.hasOwn(commands, body.operation)) return sendJson(response, 400, { error: "Choose a project and regenerate or verify." });
-        return sendJson(response, 200, actionResult(await runCommand(project, commands[body.operation], { timeoutMs: 120_000 })));
+        const commands = CONFIG_COMMANDS;
+        if (!project || typeof body.operation !== "string" || !Object.hasOwn(commands, body.operation)) return sendJson(response, 400, { error: "Choose a project and regenerate, verify or migrate." });
+        const started = Date.now();
+        const raw = await runCommand(project, commands[body.operation], { timeoutMs: 120_000 });
+        const result = actionResult(raw);
+        const entry = { id: randomBytes(6).toString("hex"), at: new Date().toISOString(), project: project.id, name: project.name, action: body.operation, ok: result.ok, exitCode: raw.status ?? null, durationMs: Date.now() - started, output: result.output };
+        configLogs.unshift(entry);
+        if (configLogs.length > CONFIG_LOG_LIMIT) configLogs.length = CONFIG_LOG_LIMIT;
+        if (body.operation === "verify") lastVerify.set(project.id, { ok: result.ok, at: entry.at, exitCode: entry.exitCode });
+        return sendJson(response, 200, { ...result, entry });
+      }
+      if (url.pathname === "/api/config/log" && request.method === "GET") {
+        const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
+        if (!project) return sendJson(response, 400, { error: "Select a project." });
+        return sendJson(response, 200, {
+          status: lastVerify.get(project.id) ?? null,
+          entries: configLogs.filter((entry) => entry.project === project.id).slice(0, 50),
+        });
       }
       if (url.pathname === "/api/projects/create" && request.method === "POST") {
         const body = await readBody(request);

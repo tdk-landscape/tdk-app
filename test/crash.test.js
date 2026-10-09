@@ -649,7 +649,7 @@ describe("CRUD actions through the TDK CLI", () => {
     const { server } = await boot({ runCommand });
     await post(server, "/api/config", { project: "a", operation: "regenerate" });
     await post(server, "/api/config", { project: "a", operation: "verify" });
-    assert.deepEqual(calls.map((call) => call.args), [["config", "regenerate"], ["project", "--check"]]);
+    assert.deepEqual(calls.map((call) => call.args), [["config", "regenerate"], ["config", "verify"]]);
     for (const operation of ["delete", "__proto__", "constructor", "toString", ["verify"], undefined]) {
       assert.equal((await post(server, "/api/config", { project: "a", operation })).status, 400, String(operation));
     }
@@ -793,6 +793,60 @@ describe("disk cleanup", () => {
   it("restart refusal on a full disk is flagged lowDisk", async () => {
     const result = await restartDockerDesktop({ platform: "darwin", free: () => 1, run: async () => ({ status: 0 }) });
     assert.equal(result.lowDisk, true);
+  });
+});
+
+describe("config drift checks and log", () => {
+  it("runs verify as config verify, records exit code, and reports drift state", async () => {
+    let exit = 1;
+    const { server } = await boot({ runCommand: async () => ({ status: exit, stdout: "drift: 2 files", stderr: "" }) });
+    const first = await post(server, "/api/config", { project: "a", operation: "verify" });
+    assert.equal(first.json.ok, false);
+    assert.equal(first.json.entry.exitCode, 1);
+    exit = 0;
+    await post(server, "/api/config", { project: "a", operation: "verify" });
+    const log = await raw(server, { path: "/api/config/log?project=a" });
+    assert.equal(log.json.status.ok, true, "latest verify wins");
+    assert.equal(log.json.entries.length, 2);
+    assert.equal(log.json.entries[0].exitCode, 0, "newest first");
+  });
+
+  it("allows migrate and logs it; rejects anything else", async () => {
+    const calls = [];
+    const { server } = await boot({ runCommand: async (_p, args) => { calls.push(args); return { status: 0, stdout: "migrated 6", stderr: "" }; } });
+    const ok = await post(server, "/api/config", { project: "a", operation: "migrate" });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(calls, [["config", "migrate"]]);
+    for (const operation of ["delete", "toString", "__proto__", ["verify"], undefined]) {
+      assert.equal((await post(server, "/api/config", { project: "a", operation })).status, 400, String(operation));
+    }
+    assert.equal(calls.length, 1);
+  });
+
+  it("keeps logs per project and caps the total", async () => {
+    const { server } = await boot({ projects: [{ id: "a", name: "a", root: "/projects/a" }, { id: "b", name: "b", root: "/projects/b" }], runCommand: async () => ({ status: 0, stdout: "", stderr: "" }) });
+    await post(server, "/api/config", { project: "a", operation: "verify" });
+    await post(server, "/api/config", { project: "b", operation: "verify" });
+    assert.equal((await raw(server, { path: "/api/config/log?project=a" })).json.entries.length, 1);
+    assert.equal((await raw(server, { path: "/api/config/log?project=b" })).json.entries.length, 1);
+    assert.equal((await raw(server, { path: "/api/config/log?project=zzz" })).status, 400);
+  });
+
+  it("masks the username in logged output and needs token and origin", async () => {
+    const home = homedir();
+    const { server } = await boot({ runCommand: async () => ({ status: 1, stdout: `drift in ${home}/Developer/x`, stderr: "" }) });
+    await post(server, "/api/config", { project: "a", operation: "verify" });
+    const log = await raw(server, { path: "/api/config/log?project=a" });
+    assert(!log.text.includes(home.split("/").pop()));
+    assert.equal((await raw(server, { path: "/api/config/log?project=a", auth: false })).status, 403);
+    assert.equal((await post(server, "/api/config", { project: "a", operation: "verify" }, { headers: {} })).status, 403);
+  });
+
+  it("runs a long-running command with its own timeout and reports a killed run", async () => {
+    const { server } = await boot({ runCommand: async () => ({ status: null, stdout: "", stderr: "" }) });
+    const response = await post(server, "/api/config", { project: "a", operation: "regenerate" });
+    assert.equal(response.json.ok, false);
+    assert.equal(response.json.entry.exitCode, null);
   });
 });
 
