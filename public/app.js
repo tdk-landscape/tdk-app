@@ -82,8 +82,18 @@ function actionButton(action, project, scope = "project", name = "", label = act
   return `<button class="button ${action === "start" ? "primary" : action === "stop" ? "danger" : ""} ${extra}" type="button" data-action="${esc(action)}" data-project="${esc(project.id)}" data-scope="${esc(scope)}" data-name="${esc(name)}">${esc(label)}</button>`;
 }
 
+// Borderless, icon-only toolbar button (tooltip carries the label).
+function iconButton(action, title, data = {}) {
+  const attrs = Object.entries(data).map(([key, value]) => `data-${key}="${esc(value)}"`).join(" ");
+  return `<button class="icon-btn" type="button" data-action="${esc(action)}" data-iconed="1" ${attrs} title="${esc(title)}" aria-label="${esc(title)}"><svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[ACTION_ICONS[action]] || ""}</svg></button>`;
+}
+
+function menuButton(items) {
+  return `<div class="menu-wrap"><button class="icon-btn" type="button" data-menu title="More actions" aria-label="More actions" aria-haspopup="menu"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.5" fill="currentColor"/><circle cx="10" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/></svg></button><div class="menu" role="menu" hidden>${items.map((item) => item === "-" ? `<hr>` : `<button type="button" role="menuitem" data-action="${esc(item.action)}" data-iconed="1" ${Object.entries(item.data || {}).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ")}><svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[ACTION_ICONS[item.action]] || ""}</svg>${esc(item.label)}</button>`).join("")}</div></div>`;
+}
+
 function actionSet(project, scope = "project", name = "", compact = false) {
-  const klass = compact ? "row-actions" : "detail-actions";
+  const klass = "row-actions";
   return `<div class="${klass}">${actionButton("start", project, scope, name, "Start")}${scope === "project" ? `${actionButton("stop", project, scope, name, "Stop")}${actionButton("restart", project, scope, name, "Restart")}` : ""}</div>`;
 }
 
@@ -137,7 +147,7 @@ function renderOverview() {
       <button class="project-open" type="button" data-select-project="${esc(project.id)}">${symbolMarkup(project.name)}<span class="row-title"><strong>${esc(project.name)}</strong><small>${esc(project.path)}</small></span></button>
       ${project.error ? `<span class="status-label"><i class="state-dot error"></i>Unavailable</span>` : statusMarkup(project.tiltRunning ? "running" : "stopped")}
       ${scoreMarkup(project)}
-      <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` · ${conflicts} port conflicts` : ""}`}</span>
+      <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` <span class="badge warn" title="${conflicts} configured port conflicts">${conflicts} conflicts</span>` : ""}`}</span>
       ${actionSet(project, "project", "", true)}
     </div>`;
   }).join("");
@@ -173,9 +183,9 @@ function renderDetail(project) {
       <div class="resource-name" title="${esc(resource.name)}">${esc(resource.name)}${resource.type ? `<span class="resource-type">${esc(resource.type)}</span>` : ""}</div>
       ${statusMarkup(resource.status)}
       ${resource.url ? `<a class="resource-url" href="${esc(resource.url)}" target="_blank" rel="noreferrer">${esc(resource.url)}</a>` : `<span class="resource-url">No endpoint</span>`}
-      <div class="resource-actions">${actionButton("start", project, "resource", resource.name)}<button class="button" type="button" data-action="move-resource" data-project="${esc(project.id)}" data-name="${esc(resource.name)}" data-stack="${esc(resource.stack || "")}">Move</button><button class="button" type="button" data-action="logs" data-project="${esc(project.id)}" data-name="${esc(resource.name)}">Logs</button></div>
+      <div class="resource-actions">${iconButton("start", `Start ${resource.name}`, { project: project.id, scope: "resource", name: resource.name })}${iconButton("move-resource", "Move to another stack", { project: project.id, name: resource.name, stack: resource.stack || "" })}${iconButton("logs", "Recent logs", { project: project.id, name: resource.name })}</div>
     </div>`).join("") : `<div class="resource-row"><span class="resource-name">No resources assigned</span></div>`;
-    const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${actionButton("start", project, "stack", name)}</div>`;
+    const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${iconButton("start", `Start stack ${name}`, { project: project.id, scope: "stack", name })}</div>`;
     return `<section class="stack ${closedStacks.has(`${project.id}/${name}`) ? "" : "open"}" data-stack="${esc(name)}" data-key="${esc(`${project.id}/${name}`)}"><div class="stack-head"><button class="stack-toggle" type="button" aria-expanded="${!closedStacks.has(`${project.id}/${name}`)}">${chevronMarkup()}<span class="stack-name">${esc(name)}</span><span class="stack-count">${items.length} resource${items.length === 1 ? "" : "s"}</span></button>${quickActions}</div><div class="resource-list">${resourcesMarkup}</div></section>`;
   }).join("");
 
@@ -185,11 +195,16 @@ function renderDetail(project) {
     <div id="notice" class="notice" role="status"></div>
     ${project.error ? `<div class="notice show error">Could not read status: ${esc(project.error)}</div>` : ""}
     <div class="detail-head"><div class="detail-title"><button class="back-link" type="button" data-view-overview>← All projects</button><h1>${esc(project.name)}</h1><code class="detail-path">${esc(project.path)}</code></div>
-      <div class="detail-actions">${actionSet(project)}<button class="button" type="button" data-action="open-project" data-project="${esc(project.id)}">Open folder</button><button class="button" type="button" data-action="config-regenerate" data-project="${esc(project.id)}">Regenerate</button><button class="button" type="button" data-action="config-verify" data-project="${esc(project.id)}">Verify</button><button class="button" type="button" data-action="hide-project" data-project="${esc(project.id)}">${hidden.has(project.id) ? "Unhide" : "Hide"}</button><button class="button" type="button" data-action="open-terminal" data-project="${esc(project.id)}">Open terminal</button></div></div>
+      <div class="detail-actions">${actionSet(project)}<span class="toolbar-sep"></span>${iconButton("open-project", "Open folder in Finder", { project: project.id })}${iconButton("open-terminal", "Open in Terminal", { project: project.id })}${menuButton([
+        { action: "config-regenerate", label: "Regenerate configs", data: { project: project.id } },
+        { action: "config-verify", label: "Verify configs", data: { project: project.id } },
+        "-",
+        { action: "hide-project", label: hidden.has(project.id) ? "Unhide project" : "Hide project", data: { project: project.id } },
+      ])}</div></div>
     <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
-    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="button" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="button primary" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
+    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="link-btn" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="link-btn" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
   </div>`;
 }
 
@@ -246,7 +261,7 @@ function ringMarkup({ value, text, sub = "", label = "", size = 44, stroke = Mat
   return `<span class="ring ${cls}" style="width:${size}px;height:${size}px" ${title ? `title="${esc(title)}"` : ""} role="img" aria-label="${esc(label || text)}">
     <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--ring-a)"/><stop offset="1" style="stop-color:var(--ring-b)"/></linearGradient></defs>
     <circle class="ring-track" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke-width="${stroke}"/>
-    <circle class="ring-fill" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="url(#${id})" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${center} ${center})"/>
+    ${filled > 0 ? `<circle class="ring-fill" cx="${center}" cy="${center}" r="${radius}" fill="none" stroke="url(#${id})" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${filled} ${circumference}" transform="rotate(-90 ${center} ${center})"/>` : ""}
     <text class="ring-num" x="${center}" y="${numY}" dy=".35em" text-anchor="middle" font-size="${numSize}">${esc(text)}</text>${sub ? `<text class="ring-sub" x="${center}" y="${center + size * 0.2}" dy=".35em" text-anchor="middle" font-size="${Math.round(size * 0.12)}">${esc(sub)}</text>` : ""}</svg></span>`;
 }
 
@@ -258,7 +273,7 @@ function scoreMarkup(project, size = 44) {
 }
 
 function gaugeCard({ value, text, sub = "", title, caption, cls }) {
-  return `<div class="gauge">${ringMarkup({ value, text, sub, size: 104, stroke: 10, cls: cls ?? scoreClass(value), label: title })}<strong>${esc(title)}</strong><span>${esc(caption)}</span></div>`;
+  return `<div class="gauge">${ringMarkup({ value, text, size: 60, stroke: 6, cls: cls ?? scoreClass(value), label: title })}<div class="gauge-copy"><strong>${esc(title)}</strong><span>${esc(caption)}</span></div></div>`;
 }
 
 function stackedBar(result) {
@@ -288,7 +303,7 @@ async function loadDoctors(force = false) {
 
 function doctorSection(project) {
   const result = doctors.get(project.id);
-  const rerun = `<button class="button" type="button" data-action="doctor-refresh" data-project="${esc(project.id)}">Run again</button>`;
+  const rerun = iconButton("doctor-refresh", "Run doctor again", { project: project.id });
   if (!result) return collapsible("doctor", "Doctor", `<div class="doctor-box">Running tdk doctor…</div>`, rerun);
   if (result.error) return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`, rerun);
   const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
@@ -384,6 +399,7 @@ function applyBusy() {
   for (const button of document.querySelectorAll('[data-action="start"], [data-action="stop"], [data-action="restart"]')) {
     if (busy.has(button.dataset.project)) {
       button.disabled = true;
+      if (button.classList.contains("icon-btn")) continue;
       if (button.dataset.action === "start" || button.dataset.action === "restart") button.textContent = button.dataset.action === "start" ? "Starting…" : "Restarting…";
       else button.textContent = "Stopping…";
     }
@@ -731,3 +747,12 @@ async function openDiskCleanup() {
     },
   });
 }
+
+// Popover menus: toggle on click, close on outside click or Escape.
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-menu]");
+  for (const menu of document.querySelectorAll(".menu:not([hidden])")) if (!trigger || menu.previousElementSibling !== trigger) menu.hidden = true;
+  if (trigger) { const menu = trigger.nextElementSibling; menu.hidden = !menu.hidden; event.stopPropagation(); }
+  else if (event.target.closest(".menu [data-action]")) event.target.closest(".menu").hidden = true;
+}, true);
+document.addEventListener("keydown", (event) => { if (event.key === "Escape") for (const menu of document.querySelectorAll(".menu")) menu.hidden = true; });

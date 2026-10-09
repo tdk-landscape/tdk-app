@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     var server: Process?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let mode = ProcessInfo.processInfo.environment["TDK_APPEARANCE"] { NSApp.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua) }
         let config = WKWebViewConfiguration()
         // Lets the page switch to its translucent theme only inside the native window.
         config.userContentController.addUserScript(WKUserScript(source: "document.documentElement.classList.add('native')", injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -118,6 +119,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             return decisionHandler(.cancel)
         }
         decisionHandler(.allow)
+    }
+
+    // Developer aid: TDK_SNAPSHOT=/path.png renders the page to an image and exits.
+    // TDK_SNAPSHOT_JS runs first (e.g. to open a project); TDK_APPEARANCE=dark|light forces the theme.
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let env = ProcessInfo.processInfo.environment
+        guard let path = env["TDK_SNAPSHOT"], webView.url?.host == "127.0.0.1" else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (Double(env["TDK_SNAPSHOT_DELAY"] ?? "") ?? 4.0)) {
+            let js = env["TDK_SNAPSHOT_JS"] ?? "0"
+            webView.evaluateJavaScript(js) { _, _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    webView.takeSnapshot(with: nil) { image, _ in
+                        guard let image = image else { exit(2) }
+                        let dark = env["TDK_APPEARANCE"] == "dark"
+                        let out = NSImage(size: image.size)
+                        out.lockFocus()
+                        (dark ? NSColor(white: 0.13, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+                        NSRect(origin: .zero, size: image.size).fill()
+                        image.draw(in: NSRect(origin: .zero, size: image.size))
+                        out.unlockFocus()
+                        if let tiff = out.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
+                            try? png.write(to: URL(fileURLWithPath: path))
+                        }
+                        exit(0)
+                    }
+                }
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {

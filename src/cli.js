@@ -44,7 +44,7 @@ try {
   const projects = [];
   let markReady;
   const projectsReady = new Promise((resolve) => { markReady = resolve; });
-  const { server, url } = await startAppServer({ projects, projectsReady, port: options.port });
+  const { server, url } = await startAppServer({ projects, projectsReady, port: options.port, prewarm: true });
   if (options.open) openBrowser(url).catch(() => {});
   console.log(`TDK App is running at ${url}`);
   setTimeout(() => {

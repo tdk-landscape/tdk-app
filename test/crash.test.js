@@ -592,7 +592,7 @@ describe("username masking", () => {
       assert(!response.text.includes("someone-else"));
     }
     const projectsResponse = await raw(server, { path: "/api/projects" });
-    assert.match(projectsResponse.json.projects[0].path, /\/\*\*\*\*\/Developer\/a$/);
+    assert.equal(projectsResponse.json.projects[0].path, "~/Developer/a");
   });
 
   it("masks usernames inside error messages too", async () => {
@@ -723,6 +723,28 @@ describe("CRUD actions through the TDK CLI", () => {
       assert.equal((await raw(server, { path })).status, 404, `${path} GET`);
       assert.equal((await post(server, path, "{bad")).status, 400, `${path} bad json`);
     }
+  });
+});
+
+describe("status cache", () => {
+  it("answers repeat /api/projects from cache and refreshes in the background", async () => {
+    let calls = 0;
+    const { server } = await boot({ runCommand: async (_p, args) => { if (args[0] === "status") calls += 1; return goodStatus; } });
+    await raw(server, { path: "/api/projects" });
+    const first = calls;
+    await raw(server, { path: "/api/projects" });
+    assert.equal(calls, first, "fresh cache is reused");
+  });
+
+  it("prewarms status after the scan only when asked", async () => {
+    let calls = 0;
+    let markReady;
+    const ready = new Promise((resolve) => { markReady = resolve; });
+    await boot({ prewarm: true, projectsReady: ready, runCommand: async (_p, args) => { if (args[0] === "status") calls += 1; return goodStatus; } });
+    assert.equal(calls, 0);
+    markReady();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(calls, projects.length);
   });
 });
 

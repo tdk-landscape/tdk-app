@@ -126,11 +126,10 @@ function sameSecret(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-// Never show the account name: the real home path and any other /Users/<name> become /Users/****.
+// Never show the account name: the home path becomes ~ and any other /Users/<name> becomes /Users/****.
 export function maskPaths(text) {
   const home = homedir();
-  const masked = join(dirname(home), "****");
-  return text.split(home).join(masked).replace(/\/Users\/(?!\*{4})[^/\\"\s]+/g, "/Users/****");
+  return text.split(home).join("~").replace(/\/Users\/(?!\*{4})[^/\\"\s]+/g, "/Users/****");
 }
 
 function sendJson(response, status, data) {
@@ -439,11 +438,40 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop }) {
+export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop, prewarm = false }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
   let updating = false;
   let restartingDocker = false;
+  // Stale-while-revalidate status cache: answers instantly after the first load, refreshes in the background.
+  const statusCache = new Map();
+  const STATUS_FRESH_MS = 4000;
+  const refreshStatus = (project) => {
+    const entry = statusCache.get(project.id) ?? {};
+    if (entry.pending) return entry.pending;
+    entry.pending = projectStatus(project, runCommand).catch((error) => ({
+      project, resources: [], stacks: [], ports: [], tiltRunning: false,
+      error: error instanceof Error ? error.message : String(error),
+    })).then((snapshot) => {
+      entry.snapshot = snapshot;
+      entry.at = Date.now();
+      entry.pending = null;
+      return snapshot;
+    });
+    statusCache.set(project.id, entry);
+    return entry.pending;
+  };
+  const getStatus = (project) => {
+    const entry = statusCache.get(project.id);
+    if (!entry?.snapshot) return refreshStatus(project);
+    if (Date.now() - entry.at > STATUS_FRESH_MS) void refreshStatus(project);
+    return entry.snapshot;
+  };
+  const invalidateStatus = (project) => {
+    const entry = statusCache.get(project.id);
+    if (entry) entry.at = 0;
+  };
+  if (prewarm) void Promise.resolve(projectsReady).then(() => { for (const project of projects) void refreshStatus(project); });
   const doctorCache = new Map();
   const DOCTOR_TTL_MS = 120_000;
   const loadDoctor = (project, force) => {
@@ -538,10 +566,7 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
       if (url.pathname === "/api/projects" && request.method === "GET") {
         await projectsReady;
         // One broken project must not take the whole dashboard down.
-        const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand).catch((error) => ({
-          project, resources: [], stacks: [], ports: [], tiltRunning: false,
-          error: error instanceof Error ? error.message : String(error),
-        }))));
+        const snapshots = await Promise.all(projects.map((project) => getStatus(project)));
         const conflicts = findConflicts(snapshots);
         return sendJson(response, 200, {
           projects: snapshots.map((snapshot) => ({
@@ -587,7 +612,12 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         if (hasStack) up.push(body.stack);
         if (body.resources?.length) up.push("--only", ...body.resources);
         if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
-        const result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
+        let result;
+        try {
+          result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
+        } finally {
+          invalidateStatus(project);
+        }
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
       }
       if (url.pathname === "/api/disk" && request.method === "GET") {
@@ -641,6 +671,7 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         }
         const result = actionResult(await runCommand(project, args, { timeoutMs: 300_000 }));
         doctorCache.delete(project.id);
+        invalidateStatus(project);
         return sendJson(response, 200, result);
       }
       if (url.pathname === "/api/stacks" && request.method === "POST") {
@@ -651,6 +682,7 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
           return sendJson(response, 400, { error: "Choose a project, a kebab-case stack name and at least one resource." });
         }
         const result = actionResult(await runCommand(project, ["stack", body.name, "--resources", ...names, "--yes"], { timeoutMs: 120_000 }));
+        invalidateStatus(project);
         return sendJson(response, 200, result);
       }
       if (url.pathname === "/api/config" && request.method === "POST") {

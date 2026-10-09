@@ -585,6 +585,44 @@
       .notice { white-space: pre-line; }
       .checks label small { display: block; font-size: 12px; color: var(--tertiary); }
       .checks label.disabled { opacity: .5; }
+
+      /* Compact widget gauges and row details (from real snapshots) */
+      .gauge, .native .gauge { display: flex; align-items: center; justify-items: start; gap: 14px; padding: 14px 16px; text-align: left; border-radius: 10px; }
+      .gauge .ring { margin: 0; }
+      .gauge-copy { display: grid; gap: 2px; min-width: 0; }
+      .gauge-copy strong { font-size: 13px; font-weight: 600; color: var(--secondary); }
+      .gauge-copy span { font-size: 15px; font-weight: 500; color: var(--label); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .row-meta { white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; }
+      .badge { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 5px; font-size: 12px; font-weight: 600; }
+      .badge.warn { background: var(--amber-wash); color: var(--amber); }
+      .row-title small { font-size: 12px; }
+
+      /* Mac toolbar controls: icon buttons, link buttons, popover menu (loaded last) */
+      .icon-btn { width: 28px; height: 28px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); transition: background .12s ease, color .12s ease, transform .08s ease; }
+      .icon-btn svg { width: 16px; height: 16px; }
+      .icon-btn:hover { background: var(--press); color: var(--label); }
+      .icon-btn:active { transform: scale(.9); background: color-mix(in srgb, var(--label) 14%, transparent); }
+      .icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 50%, transparent); }
+      .icon-btn:disabled { opacity: .35; transform: none; }
+      .icon-btn[data-action="start"] { color: var(--accent); }
+      .link-btn { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: var(--accent); font: 500 13px var(--sans); transition: background .12s ease, transform .08s ease; }
+      .link-btn:hover { background: var(--accent-wash); }
+      .link-btn:active { transform: scale(.96); }
+      .link-btn .btn-icon { width: 13px; height: 13px; }
+      .toolbar-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--line); }
+      .detail-head { align-items: flex-start; }
+      .detail-actions { flex-wrap: nowrap; align-items: center; gap: 4px; }
+      .detail-title h1 { font-size: 26px; }
+      .resource-actions, .stack-quick { gap: 2px; opacity: .55; transition: opacity .12s ease; }
+      .resource-row:hover .resource-actions, .stack-head:hover .stack-quick, .resource-actions:focus-within, .stack-quick:focus-within { opacity: 1; }
+      .menu-wrap { position: relative; }
+      .menu { position: absolute; right: 0; top: 32px; z-index: 30; min-width: 200px; padding: 5px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 82%, transparent); backdrop-filter: blur(30px) saturate(1.8); -webkit-backdrop-filter: blur(30px) saturate(1.8); box-shadow: 0 0 0 .5px var(--line), 0 10px 30px rgba(0, 0, 0, .25); }
+      .menu button { width: 100%; display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border: 0; border-radius: 5px; background: transparent; color: var(--label); font: 400 13px var(--sans); text-align: left; }
+      .menu button svg { width: 14px; height: 14px; color: var(--secondary); }
+      .menu button:hover, .menu button:focus-visible { outline: none; background: var(--accent); color: #fff; }
+      .menu button:hover svg { color: #fff; }
+      .menu hr { margin: 4px 6px; border: 0; border-top: 1px solid var(--line); }
+      span.resource-url { color: var(--tertiary); font-family: var(--sans); }
     </style>
   </head>
   <body>
