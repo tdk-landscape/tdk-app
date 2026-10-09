@@ -27,7 +27,7 @@ async function api(url, options = {}) {
     },
   });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || "Request failed.");
+  if (!response.ok) throw Object.assign(new Error(body.error || "Request failed."), { code: body.code });
   return body;
 }
 
@@ -276,14 +276,23 @@ function applyActiveNotice() {
   element.textContent = activeNotice.message;
   element.classList.toggle("error", activeNotice.isError);
   element.classList.add("show");
+  if (activeNotice.action) {
+    const button = document.createElement("button");
+    button.className = "button primary";
+    button.type = "button";
+    button.textContent = activeNotice.action.label;
+    button.style.marginLeft = "12px";
+    button.addEventListener("click", activeNotice.action.run);
+    element.append(button);
+  }
 }
 
 // Sticky notices (in-progress work) stay until replaced; others clear after a few seconds.
-function showNotice(message, isError = false, sticky = false) {
+function showNotice(message, isError = false, sticky = false, action = null) {
   clearTimeout(noticeTimer);
-  activeNotice = { message, isError };
+  activeNotice = { message, isError, action };
   applyActiveNotice();
-  if (!sticky) {
+  if (!sticky && !action) {
     noticeTimer = setTimeout(() => {
       activeNotice = null;
       document.querySelector("#notice")?.classList.remove("show");
@@ -299,6 +308,24 @@ function applyBusy() {
       else button.textContent = "Stopping…";
     }
   }
+}
+
+let fixingDocker = false;
+
+async function fixDockerAndRetry(button) {
+  if (fixingDocker) return;
+  fixingDocker = true;
+  showNotice("Restarting Docker Desktop… this usually takes 30–90 seconds. The start will continue automatically once Docker answers.", false, true);
+  try {
+    const result = await api("/api/docker/restart", { method: "POST", body: "{}" });
+    if (!result.ok) return showNotice(result.message, true, true);
+    showNotice("Docker is running again. Continuing…", false, true);
+  } catch (error) {
+    return showNotice(`Could not restart Docker: ${error.message}`, true, true);
+  } finally {
+    fixingDocker = false;
+  }
+  await handleAction(button);
 }
 
 async function handleAction(button) {
@@ -346,7 +373,10 @@ async function handleAction(button) {
     showNotice(result.message || `${action[0].toUpperCase()}${action.slice(1)} requested.`);
     setTimeout(refreshData, 500);
   } catch (error) {
-    showNotice(error.message, true);
+    if (error.code === "docker_unavailable") {
+      // Offer to fix Docker and then carry on with the original action.
+      showNotice(error.message, true, true, { label: "Restart Docker and continue", run: () => fixDockerAndRetry(button) });
+    } else showNotice(error.message, true);
   } finally {
     busy.delete(project);
     render();

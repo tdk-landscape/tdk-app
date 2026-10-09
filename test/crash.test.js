@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { checkDocker, discoverProjects, lowDiskNote, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
+import { checkDocker, discoverProjects, lowDiskNote, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -502,6 +502,79 @@ describe("Docker preflight", () => {
     assert.equal(await checkDocker(async () => ({ status: null, stdout: "", stderr: "ENOENT" })), false);
     assert.equal(await checkDocker(async () => ({ status: 1, stdout: "", stderr: "daemon not running" })), false);
     assert.equal(await checkDocker(async () => ({ status: 0, stdout: "27.0.1", stderr: "" })), true);
+  });
+});
+
+describe("Docker restart", () => {
+  const fakeRun = (script = {}) => {
+    const calls = [];
+    const run = async (command, args) => { calls.push([command, ...args]); return script[command]?.(calls.length) ?? { status: 1, stdout: "", stderr: "" }; };
+    return { run, calls };
+  };
+  const noSleep = async () => {};
+
+  it("quits, reopens and waits until Docker answers", async () => {
+    const { run, calls } = fakeRun({ osascript: () => ({ status: 0 }), pgrep: () => ({ status: 1 }), open: () => ({ status: 0 }) });
+    let checks = 0;
+    const result = await restartDockerDesktop({ run, sleep: noSleep, platform: "darwin", free: () => 50, check: async () => ++checks >= 3 });
+    assert.equal(result.ok, true);
+    assert.equal(checks, 3);
+    assert.deepEqual(calls.map((call) => call[0]), ["osascript", "pgrep", "open"]);
+  });
+
+  it("force-kills Docker when it refuses to quit", async () => {
+    const { run, calls } = fakeRun({ osascript: () => ({ status: 0 }), pgrep: () => ({ status: 0 }), pkill: () => ({ status: 0 }), open: () => ({ status: 0 }) });
+    const result = await restartDockerDesktop({ run, sleep: noSleep, platform: "darwin", free: () => 50, check: async () => true });
+    assert.equal(result.ok, true);
+    assert(calls.some((call) => call[0] === "pkill" && call.includes("-9")));
+  });
+
+  it("refuses to restart when the disk is nearly full, without touching Docker", async () => {
+    const { run, calls } = fakeRun();
+    const result = await restartDockerDesktop({ run, sleep: noSleep, platform: "darwin", free: () => 1.2, check: async () => true });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /disk/);
+    assert.equal(calls.length, 0);
+  });
+
+  it("refuses on non-macOS and reports a missing or still-dead Docker", async () => {
+    assert.equal((await restartDockerDesktop({ platform: "linux" })).ok, false);
+    const missing = fakeRun({ osascript: () => ({ status: 0 }), pgrep: () => ({ status: 1 }), open: () => ({ status: 1 }) });
+    assert.match((await restartDockerDesktop({ run: missing.run, sleep: noSleep, platform: "darwin", free: () => 50, check: async () => true })).message, /Could not open/);
+    const dead = fakeRun({ osascript: () => ({ status: 0 }), pgrep: () => ({ status: 1 }), open: () => ({ status: 0 }) });
+    let now = 0;
+    const realNow = Date.now;
+    Date.now = () => (now += 100_000);
+    try {
+      const result = await restartDockerDesktop({ run: dead.run, sleep: noSleep, platform: "darwin", free: () => 50, check: async () => false, waitMs: 250_000 });
+      assert.equal(result.ok, false);
+      assert.match(result.message, /still not responding/);
+    } finally { Date.now = realNow; }
+  });
+
+  it("endpoint runs the restart once at a time and needs POST, token and origin", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    let calls = 0;
+    const { server } = await boot({ dockerRestart: async () => { calls += 1; await gate; return { ok: true, message: "up" }; } });
+    assert.equal((await raw(server, { path: "/api/docker/restart" })).status, 404);
+    assert.equal((await post(server, "/api/docker/restart", {}, { headers: {} })).status, 403);
+    const first = post(server, "/api/docker/restart", {});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal((await post(server, "/api/docker/restart", {})).status, 409);
+    release();
+    const done = await first;
+    assert.equal(done.status, 200);
+    assert.equal(done.json.ok, true);
+    assert.equal(calls, 1);
+  });
+
+  it("a throwing restart returns a JSON error and the server stays up", async () => {
+    const { server } = await boot({ dockerRestart: async () => { throw new Error("osascript missing"); } });
+    const response = await post(server, "/api/docker/restart", {});
+    assert.equal(response.status, 500);
+    assert.match(response.json.error, /osascript/);
+    await assertAlive(server);
   });
 });
 

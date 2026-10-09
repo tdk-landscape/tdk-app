@@ -40,15 +40,27 @@ try {
     console.log("Usage: tdk-app [--project <path> ...] [--scan-root <path> ...] [--no-scan] [--no-open] [--port <port>]");
     process.exit(0);
   }
-  const projects = discoverProjects({
-    currentRoot: discoverProjectRoot(),
-    projectRoots: options.projects,
-    scanRoots: [...(options.scan ? commonProjectScanRoots() : []), ...options.scanRoots],
-  });
-  const { server, url } = await startAppServer({ projects, port: options.port });
+  // Listen first and scan afterwards so the window and its loader appear immediately.
+  const projects = [];
+  let markReady;
+  const projectsReady = new Promise((resolve) => { markReady = resolve; });
+  const { server, url } = await startAppServer({ projects, projectsReady, port: options.port });
   if (options.open) openBrowser(url).catch(() => {});
   console.log(`TDK App is running at ${url}`);
-  console.log(`Found ${projects.length} TDK project${projects.length === 1 ? "" : "s"}.`);
+  setTimeout(() => {
+    try {
+      projects.push(...discoverProjects({
+        currentRoot: discoverProjectRoot(),
+        projectRoots: options.projects,
+        scanRoots: [...(options.scan ? commonProjectScanRoots() : []), ...options.scanRoots],
+      }));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    markReady();
+    console.log(`Found ${projects.length} TDK project${projects.length === 1 ? "" : "s"}.`);
+  }, 250);
   console.log("Press Ctrl+C to close the local command center.");
   const shutdown = () => server.close(() => process.exit(0));
   process.once("SIGINT", shutdown);

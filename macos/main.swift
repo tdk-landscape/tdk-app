@@ -54,8 +54,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        webView.loadHTMLString("<body style='background:#1c1c1e;color:#999;font:14px -apple-system;padding:2em'>Starting TDK App…</body>", baseURL: nil)
+        webView.loadHTMLString(Self.splash("Starting…"), baseURL: nil)
         startServer()
+    }
+
+    // Instant native splash shown until the server answers; no network needed.
+    static func splash(_ status: String) -> String {
+        """
+        <meta name=color-scheme content="light dark"><style>
+        html,body{margin:0;height:100%;background:transparent;font:15px -apple-system,sans-serif;color:#141413}
+        @media(prefers-color-scheme:dark){body{color:#faf9f5}}
+        .c{height:100%;display:grid;place-content:center;justify-items:center;gap:18px}
+        .m{width:64px;height:64px;border-radius:18px;display:grid;place-items:center;font:700 30px -apple-system;color:#fff;background:linear-gradient(135deg,#ff8a65,#b4532f);box-shadow:0 12px 36px rgba(180,83,47,.4);animation:p 1.6s ease-in-out infinite}
+        .s{width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(128,128,128,.3);border-top-color:#d9693f;animation:r .8s linear infinite}
+        .t{opacity:.7;font-size:13px}
+        @keyframes r{to{transform:rotate(360deg)}}@keyframes p{50%{transform:scale(1.06)}}
+        </style><div class=c><div class=m>T</div><div class=s></div><div class=t>\(status)</div></div>
+        """
     }
 
     func startServer() {
@@ -73,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
             buffer += text
+            DispatchQueue.main.async { if !buffer.contains("http://127.0.0.1") { self?.webView.evaluateJavaScript("document.querySelector('.t').textContent='Finding your projects…'") } }
             if let range = buffer.range(of: #"http://127\.0\.0\.1:\d+/\S*"#, options: .regularExpression),
                let url = URL(string: String(buffer[range])) {
                 handle.readabilityHandler = nil

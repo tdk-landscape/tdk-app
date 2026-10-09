@@ -335,6 +335,37 @@ export function lowDiskNote(path = homedir(), thresholdGb = 5) {
   }
 }
 
+function freeGb(path = homedir()) {
+  try {
+    const stats = statfsSync(path);
+    return (stats.bavail * stats.bsize) / 1024 ** 3;
+  } catch {
+    return Infinity;
+  }
+}
+
+// Quits Docker Desktop (force-quitting if it is stuck), reopens it and waits until the engine answers.
+export async function restartDockerDesktop({ check = checkDocker, run = (command, args) => runTdk({ root: homedir() }, args, { binary: command, timeoutMs: 20_000 }), sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), waitMs = 240_000, platform = process.platform, free = freeGb } = {}) {
+  if (platform !== "darwin") return { ok: false, message: "Restarting Docker automatically is only supported on macOS. Restart Docker manually." };
+  const gb = free();
+  if (gb < 2) return { ok: false, message: `Only ${gb.toFixed(1)} GB of disk is free, so Docker cannot start. Free at least 5 GB, then try again.` };
+  await run("osascript", ["-e", 'tell application "Docker" to quit']);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const running = await run("pgrep", ["-f", "Docker Desktop"]);
+    if (running.status !== 0) break;
+    if (attempt === 4) await run("pkill", ["-9", "-f", "/Applications/Docker.app"]);
+    await sleep(2500);
+  }
+  const opened = await run("open", ["-a", "Docker"]);
+  if (opened.status !== 0) return { ok: false, message: "Could not open Docker Desktop. Is it installed in /Applications?" };
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await sleep(4000);
+    if (await check().catch(() => false)) return { ok: true, message: "Docker is running again." };
+  }
+  return { ok: false, message: "Docker Desktop was reopened but is still not responding. Check its window for errors." };
+}
+
 export async function checkDocker(execute = runTdk) {
   const result = await execute({ root: homedir() }, ["info", "--format", "{{.ServerVersion}}"], { binary: process.env.DOCKER_BIN || "docker", timeoutMs: 8000 });
   return result.status === 0;
@@ -362,10 +393,11 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker }) {
+export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
   let updating = false;
+  let restartingDocker = false;
   const doctorCache = new Map();
   const DOCTOR_TTL_MS = 120_000;
   const loadDoctor = (project, force) => {
@@ -443,12 +475,22 @@ export function startAppServer({ projects, probe = probeCli, host = "127.0.0.1",
           updating = false;
         }
       }
+      if (url.pathname === "/api/docker/restart" && request.method === "POST") {
+        if (restartingDocker) return sendJson(response, 409, { error: "Docker is already being restarted." });
+        restartingDocker = true;
+        try {
+          return sendJson(response, 200, await dockerRestart());
+        } finally {
+          restartingDocker = false;
+        }
+      }
       if (url.pathname === "/api/doctor" && request.method === "GET") {
         const project = projects.find((entry) => entry.id === url.searchParams.get("project"));
         if (!project) return sendJson(response, 400, { error: "Select a project." });
         return sendJson(response, 200, await loadDoctor(project, url.searchParams.get("refresh") === "1"));
       }
       if (url.pathname === "/api/projects" && request.method === "GET") {
+        await projectsReady;
         // One broken project must not take the whole dashboard down.
         const snapshots = await Promise.all(projects.map((project) => projectStatus(project, runCommand).catch((error) => ({
           project, resources: [], stacks: [], ports: [], tiltRunning: false,
