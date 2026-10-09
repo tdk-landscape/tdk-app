@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: Double(ProcessInfo.processInfo.environment["TDK_WINDOW_WIDTH"] ?? "") ?? 1180, height: 780),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "TDK App"
