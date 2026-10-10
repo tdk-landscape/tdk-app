@@ -197,6 +197,7 @@ function renderOverview() {
       ${scoreMarkup(project)}
       <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.pending ? "" : project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` <span class="badge warn" title="${conflicts} configured port conflicts">${conflicts} conflicts</span>` : ""}`}</span>
       ${actionSet(project, "project", "", true)}
+      ${progressMarkup(project.id, true)}
     </div>`;
   }).join("");
 
@@ -247,6 +248,7 @@ function renderDetail(project) {
       <div class="detail-actions">${actionSet(project)}<span class="toolbar-sep"></span>${iconButton("pin-project", pinnedProjects.has(project.id) ? "Unpin project" : "Pin project", { project: project.id, pinned: pinnedProjects.has(project.id) ? "1" : "0" })}${iconButton("open-project", "Open folder in Finder", { project: project.id })}${iconButton("open-terminal", "Open in Terminal", { project: project.id })}${menuButton([
         { action: "hide-project", label: hidden.has(project.id) ? "Unhide project" : "Hide project", data: { project: project.id } },
       ])}</div></div>
+    ${progressMarkup(project.id)}
     <div class="detail-meta">${project.pending ? `<span class="status-label"><i class="state-dot"></i>Checking status…</span>` : `${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span>`}<span hidden></span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
@@ -271,8 +273,12 @@ function chevronMarkup() {
 // Stacks stay open across the 7-second refresh unless the user closed them.
 const closedStacks = new Set();
 
+// Keep the scroll position across the periodic refresh, but start at the top when switching pages.
+let lastView;
 function render() {
-  const scrollTop = content.scrollTop;
+  const view = selectedProjectId ?? "overview";
+  const scrollTop = view === lastView ? content.scrollTop : 0;
+  lastView = view;
   renderSidebar();
   const selected = projects.find((project) => project.id === selectedProjectId);
   if (selected) renderDetail(selected);
@@ -451,7 +457,7 @@ function showNotice(message, isError = false, sticky = false, action = null) {
 
 function applyBusy() {
   for (const button of document.querySelectorAll('[data-action="start"], [data-action="stop"], [data-action="restart"]')) {
-    if (busy.has(button.dataset.project)) {
+    if (busy.has(button.dataset.project) || jobActive(button.dataset.project)) {
       button.disabled = true;
       if (button.classList.contains("icon-btn")) continue;
       if (button.dataset.action === "start" || button.dataset.action === "restart") button.textContent = button.dataset.action === "start" ? "Starting…" : "Restarting…";
@@ -518,17 +524,16 @@ async function handleAction(button) {
   }
 
   busy.add(project);
-  const verb = { start: "Starting", stop: "Stopping", restart: "Restarting" }[action];
-  const target = scope === "project" ? projects.find((entry) => entry.id === project)?.name || "project" : name;
-  showNotice(`${verb} ${target}… this can take a few minutes while Docker pulls and starts containers.`, false, true);
   applyBusy();
   try {
-    const payload = { project, operation: action };
+    const payload = { project, operation: action, background: true };
     if (scope === "stack") payload.stack = name;
     if (scope === "resource") payload.resources = [name];
     const result = await api("/api/actions", { method: "POST", body: JSON.stringify(payload) });
-    showNotice(result.message || `${action[0].toUpperCase()}${action.slice(1)} requested.`);
-    setTimeout(refreshData, 500);
+    if (result.job) {
+      jobsByProject.set(project, result.job);
+      startJobPolling();
+    }
   } catch (error) {
     if (error.code === "docker_unavailable") {
       // Offer to fix Docker and then carry on with the original action.
@@ -540,6 +545,66 @@ async function handleAction(button) {
     busy.delete(project);
     render();
   }
+}
+
+// ---------- Background start / stop progress ----------
+const jobsByProject = new Map();
+const announced = new Set();
+let jobTimer = null;
+const ACTIVE = new Set(["running", "settling"]);
+
+function jobActive(projectId) {
+  return ACTIVE.has(jobsByProject.get(projectId)?.state);
+}
+
+function formatElapsed(ms) {
+  if (ms == null) return "";
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function progressMarkup(projectId, compact = false) {
+  const job = jobsByProject.get(projectId);
+  if (!job || !ACTIVE.has(job.state)) return "";
+  const progress = job.progress;
+  const verb = { start: "Starting", stop: "Stopping", restart: "Restarting" }[job.operation] || "Working";
+  const percent = progress ? progress.percent : null;
+  const step = progress ? progress.step : job.operation === "stop" ? "Stopping containers" : "Waiting for Tilt to report";
+  const label = `${verb}${percent != null ? ` · ${percent}%` : "…"}`;
+  return `<div class="job-progress ${compact ? "compact" : ""}" role="progressbar" aria-valuemin="0" aria-valuemax="100" ${percent != null ? `aria-valuenow="${percent}"` : ""} aria-label="${esc(label)}">
+    <div class="job-head"><strong>${esc(label)}</strong><span>${esc(step)}${job.elapsedMs != null ? ` · ${formatElapsed(job.elapsedMs)}` : ""}</span></div>
+    <div class="job-track ${percent == null ? "indeterminate" : ""}"><i style="width:${percent ?? 30}%"></i></div>
+  </div>`;
+}
+
+async function pollJobs() {
+  try {
+    const { jobs } = await api("/api/jobs");
+    const seen = new Set();
+    for (const job of jobs) {
+      seen.add(job.project);
+      const before = jobsByProject.get(job.project);
+      jobsByProject.set(job.project, job);
+      const name = projects.find((entry) => entry.id === job.project)?.name || "Project";
+      const key = `${job.project}:${job.id ?? "external"}:${job.state}`;
+      if (!ACTIVE.has(job.state) && before && ACTIVE.has(before.state) && !announced.has(key)) {
+        announced.add(key);
+        if (job.state === "failed") showNotice(`${name}: ${job.message || "the action failed."}`, true);
+        else showNotice(`${name}: ${job.progress?.percent === 100 ? "all resources are ready." : job.message || "done."}`);
+        void refreshData();
+      }
+    }
+    for (const projectId of [...jobsByProject.keys()]) if (!seen.has(projectId)) jobsByProject.delete(projectId);
+  } catch {}
+  render();
+  if ([...jobsByProject.values()].some((job) => ACTIVE.has(job.state))) jobTimer = setTimeout(pollJobs, 1500);
+  else jobTimer = null;
+}
+
+function startJobPolling() {
+  clearTimeout(jobTimer);
+  jobTimer = setTimeout(pollJobs, 300);
+  render();
 }
 
 projectList.addEventListener("click", (event) => {
@@ -597,6 +662,8 @@ document.querySelector("#refresh").addEventListener("click", refreshData);
 document.querySelector("#close-logs").addEventListener("click", () => document.querySelector("#logs").close());
 refreshData();
 setInterval(refreshData, 7000);
+setTimeout(pollJobs, 1200);
+setInterval(() => { if (!jobTimer) void pollJobs(); }, 15000);
 
 // Sidebar: collapse the whole sidebar (button or Cmd+B) and the Workspaces list.
 const appShell = document.querySelector(".app");

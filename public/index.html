@@ -863,6 +863,23 @@
       .project-item { display: flex; align-items: center; }
       .pinned-list { border-radius: 10px; }
       .pinned-list .resource-list { border-top: 0; padding-top: 6px; }
+
+      /* Start/stop progress */
+      .job-progress { display: grid; gap: 8px; margin: 0 0 16px; padding: 12px 14px; border: 1px solid transparent; border-radius: 10px;
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill), var(--lg-fill)) padding-box, var(--lg-rim) border-box;
+        backdrop-filter: var(--lg-blur); -webkit-backdrop-filter: var(--lg-blur); box-shadow: var(--lg-shadow); }
+      .job-progress.compact { grid-column: 1 / -1; margin: 4px 0 0; padding: 8px 10px; box-shadow: none; }
+      .job-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+      .job-head strong { font: 600 14px var(--sans); color: var(--label); font-variant-numeric: tabular-nums; }
+      .job-head span { font-size: 12.5px; color: var(--secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+      .job-track { position: relative; height: 6px; border-radius: 3px; overflow: hidden; background: var(--c-track); }
+      .job-track i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: linear-gradient(90deg, var(--cool-a), var(--cool-b)); transition: width .6s cubic-bezier(.2, .8, .3, 1); }
+      .job-track i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .45), transparent); animation: job-shine 1.6s linear infinite; }
+      .job-track.indeterminate i { animation: job-slide 1.3s ease-in-out infinite; }
+      @keyframes job-shine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+      @keyframes job-slide { 0% { left: -30%; } 100% { left: 100%; } }
+      @media (prefers-reduced-motion: reduce) { .job-track i::after, .job-track.indeterminate i { animation: none; } }
+      .project-row { grid-template-rows: auto; }
     </style>
   </head>
   <body>
