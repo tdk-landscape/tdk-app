@@ -823,6 +823,46 @@
       .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, transparent), color-mix(in srgb, var(--accent) 76%, transparent)); }
       .row-actions .button.danger { background: linear-gradient(var(--c-wash-bad), var(--c-wash-bad)); }
       .row-actions .button:active:not(:disabled) { transform: scale(.95); }
+
+      /* ===== Cooler accent, deeper see-through glass, tactile press (loaded last) ===== */
+      :root { --accent: #5856d6; --accent-wash: rgba(88, 86, 214, .14); --cool-a: #2fc2d8; --cool-b: #5f5bdc;
+        --lg-fill: rgba(255, 255, 255, .22); --lg-fill-hover: rgba(255, 255, 255, .36); --lg-fill-press: rgba(255, 255, 255, .14);
+        --lg-shadow: 0 1px 2px rgba(20, 20, 40, .1), 0 8px 24px rgba(20, 20, 40, .16), 0 2px 6px rgba(20, 20, 40, .08); }
+      @media (prefers-color-scheme: dark) { :root { --accent: #8a87ff; --accent-wash: rgba(138, 135, 255, .18); --cool-a: #44d4e6; --cool-b: #7471ff;
+        --lg-fill: rgba(255, 255, 255, .06); --lg-fill-hover: rgba(255, 255, 255, .11); --lg-fill-press: rgba(255, 255, 255, .03);
+        --lg-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px rgba(0, 0, 0, .5), 0 2px 8px rgba(0, 0, 0, .35); } }
+
+      .button, .native .button, .row-actions { transition: transform .22s cubic-bezier(.34, 1.56, .64, 1), background .18s ease, box-shadow .18s ease; }
+      .button:hover:not(:disabled), .native .button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--lg-shadow), 0 12px 30px rgba(0, 0, 0, .12), var(--lg-inner); }
+      .button:active:not(:disabled), .native .button:active:not(:disabled) { transform: scale(.93) translateY(1px); transition-duration: .06s; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .28), 0 1px 1px rgba(0, 0, 0, .1); }
+
+      /* Main action: cool teal-to-indigo glass */
+      .button.primary, .native .button.primary {
+        background: var(--lg-sheen) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 74%, transparent), color-mix(in srgb, var(--cool-b) 78%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: 0 6px 20px color-mix(in srgb, var(--cool-b) 34%, transparent), 0 2px 6px color-mix(in srgb, var(--cool-a) 25%, transparent), var(--lg-inner);
+        text-shadow: 0 1px 1px rgba(10, 20, 80, .3); }
+      .button.primary:hover:not(:disabled), .native .button.primary:hover:not(:disabled) {
+        background: var(--lg-sheen) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 88%, transparent), color-mix(in srgb, var(--cool-b) 90%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: 0 10px 28px color-mix(in srgb, var(--cool-b) 42%, transparent), 0 2px 8px color-mix(in srgb, var(--cool-a) 30%, transparent), var(--lg-inner); }
+      .button.primary:active:not(:disabled), .native .button.primary:active:not(:disabled) {
+        background: linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 70%, transparent), color-mix(in srgb, var(--cool-b) 74%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: inset 0 2px 6px rgba(10, 20, 80, .4); }
+      .row-actions .button.primary { background: linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 80%, transparent), color-mix(in srgb, var(--cool-b) 82%, transparent)); color: #fff; }
+      .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--cool-a), var(--cool-b)); }
+      .row-actions .button:active:not(:disabled) { transform: scale(.92); transition-duration: .06s; }
+      .icon-btn[data-action="start"] { color: var(--cool-b); }
+      .icon-btn:active { transform: scale(.86); transition: transform .06s ease; }
+      .ring.none { --ring-a: var(--c-none-a); }
+
+      /* Pins */
+      .pin-glyph { width: 11px; height: 11px; margin-left: 6px; vertical-align: -1px; color: var(--accent); flex: none; }
+      .icon-btn[data-pinned="1"] { color: var(--accent); }
+      .icon-btn[data-pinned="1"] svg path:first-child { fill: currentColor; fill-opacity: .35; }
+      .side-group { padding: 10px 12px 4px; font: 600 11px var(--sans); letter-spacing: .02em; color: var(--tertiary); text-transform: uppercase; }
+      .rail .side-group { display: none; }
+      .project-item { display: flex; align-items: center; }
+      .pinned-list { border-radius: 10px; }
+      .pinned-list .resource-list { border-top: 0; padding-top: 6px; }
     </style>
   </head>
   <body>

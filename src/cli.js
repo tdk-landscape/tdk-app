@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { commonProjectScanRoots, discoverProjectRoot, discoverProjects, openBrowser, startAppServer } from "./app.js";
+import { commonProjectScanRoots, defaultStatePath, discoverProjectRoot, discoverProjects, openBrowser, readAppState, resolveProjects, startAppServer, writeAppState } from "./app.js";
 
 function parseArgs(args) {
   const options = { projects: [], scanRoots: [], port: 0, scan: true, open: true };
@@ -41,19 +41,31 @@ try {
     process.exit(0);
   }
   // Listen first and scan afterwards so the window and its loader appear immediately.
+  // Start from the project roots found last time, so the list is ready at once; the scan then adds new ones.
+  const statePath = defaultStatePath();
   const projects = [];
+  const cached = options.scan ? readAppState(statePath).knownRoots : [];
+  for (const root of cached) {
+    try { projects.push(...resolveProjects(null, [root])); } catch {}
+  }
   let markReady;
   const projectsReady = new Promise((resolve) => { markReady = resolve; });
-  const { server, url } = await startAppServer({ projects, projectsReady, port: options.port, prewarm: true });
+  if (projects.length) markReady();
+  const { server, url } = await startAppServer({ projects, projectsReady, port: options.port, prewarm: true, statePath });
   if (options.open) openBrowser(url).catch(() => {});
   console.log(`TDK App is running at ${url}`);
   setTimeout(() => {
     try {
-      projects.push(...discoverProjects({
+      const found = discoverProjects({
         currentRoot: discoverProjectRoot(),
         projectRoots: options.projects,
         scanRoots: [...(options.scan ? commonProjectScanRoots() : []), ...options.scanRoots],
-      }));
+      });
+      for (const project of found) if (!projects.some((entry) => entry.root === project.root)) projects.push(project);
+      if (options.scan) {
+        const state = readAppState(statePath);
+        writeAppState({ ...state, knownRoots: projects.map((project) => project.root) }, statePath);
+      }
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);

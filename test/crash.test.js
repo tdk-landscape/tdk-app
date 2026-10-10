@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { checkDocker, discoverProjects, lowDiskNote, maskPaths, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
+import { checkDocker, discoverProjects, lowDiskNote, maskPaths, normalizeState, readAppState, writeAppState, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -847,6 +847,81 @@ describe("config drift checks and log", () => {
     const response = await post(server, "/api/config", { project: "a", operation: "regenerate" });
     assert.equal(response.json.ok, false);
     assert.equal(response.json.entry.exitCode, null);
+  });
+});
+
+describe("fast project list", () => {
+  it("answers ?fast=1 at once with pending rows, then fills them in", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const { server } = await boot({ runCommand: async (_p, args) => { if (args[0] === "status") await gate; return goodStatus; } });
+    const first = await raw(server, { path: "/api/projects?fast=1" });
+    assert.equal(first.status, 200);
+    assert(first.json.projects.every((project) => project.pending === true));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const second = await raw(server, { path: "/api/projects?fast=1" });
+    assert(second.json.projects.every((project) => !project.pending && project.resources.length === 1));
+  });
+
+  it("without fast=1 still waits for real statuses", async () => {
+    const { server } = await boot();
+    const response = await raw(server, { path: "/api/projects" });
+    assert(response.json.projects.every((project) => !project.pending));
+  });
+});
+
+describe("persistent UI state (pins, hidden, collapsed)", () => {
+  const statePut = (server, body, extra) => post(server, "/api/state", body, { method: "PUT", ...extra });
+
+  it("starts empty and never exposes known project roots", async () => {
+    const { server } = await boot({ statePath: join(tempDir(), "state.json") });
+    const response = await raw(server, { path: "/api/state" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json, { pins: { projects: [], resources: [] }, hidden: [], collapsed: [] });
+  });
+
+  it("saves pins to disk and a new server reads them back", async () => {
+    const path = join(tempDir(), "nested", "state.json");
+    const first = await boot({ statePath: path });
+    const saved = await statePut(first.server, { pins: { projects: ["a"], resources: ["a/api"] }, hidden: ["b"], collapsed: ["doctor"] });
+    assert.equal(saved.status, 200, saved.text);
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).pins, { projects: ["a"], resources: ["a/api"] });
+    const second = await boot({ statePath: path });
+    const reread = await raw(second.server, { path: "/api/state" });
+    assert.deepEqual(reread.json.pins.resources, ["a/api"]);
+    assert.deepEqual(reread.json.hidden, ["b"]);
+  });
+
+  it("cleans bad values, de-duplicates, caps sizes, and ignores knownRoots from the page", async () => {
+    const path = join(tempDir(), "state.json");
+    const { server } = await boot({ statePath: path });
+    const response = await statePut(server, { pins: { projects: ["a", "a", 5, null, "", "x".repeat(500)], resources: "nope" }, hidden: Array.from({ length: 900 }, (_, i) => `p${i}`), knownRoots: ["/etc"] });
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.json.pins, { projects: ["a"], resources: [] });
+    assert.equal(response.json.hidden.length, 500);
+    assert.deepEqual(readAppState(path).knownRoots, []);
+  });
+
+  it("rejects non-object bodies, cross-origin writes and missing tokens", async () => {
+    const { server } = await boot({ statePath: join(tempDir(), "state.json") });
+    for (const body of ["[1]", "null", "\"x\"", "{bad"]) assert.equal((await statePut(server, body)).status, 400, body);
+    assert.equal((await statePut(server, {}, { headers: {} })).status, 403);
+    assert.equal((await statePut(server, {}, { headers: { origin: "http://evil.example" } })).status, 403);
+    assert.equal((await raw(server, { path: "/api/state", auth: false })).status, 403);
+  });
+
+  it("survives a corrupt or missing state file and writes atomically", () => {
+    const dir = tempDir();
+    const path = join(dir, "state.json");
+    for (const content of ["", "{", "null", "[]", '{"pins":5}', '{"hidden":"x"}']) {
+      writeFileSync(path, content);
+      assert.deepEqual(readAppState(path), normalizeState(null), content);
+    }
+    assert.deepEqual(readAppState(join(dir, "missing.json")), normalizeState(null));
+    assert.equal(writeAppState({ hidden: ["a"] }, path), true);
+    assert.deepEqual(readdirSync(dir), ["state.json"], "no temp files left behind");
+    assert.equal(writeAppState({}, "/definitely/not/writable/state.json"), false);
   });
 });
 
