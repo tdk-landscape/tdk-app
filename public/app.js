@@ -215,7 +215,7 @@ function renderOverview() {
 
   content.innerHTML = `<div class="content-inner">
     <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p>${hidden.size ? `<div class="hidden-note">${hidden.size} hidden · <button type="button" data-action="toggle-hidden">${showHidden ? "Hide them again" : "Show them"}</button></div>` : ""}</div>
-      <div class="head-actions"><button class="button primary" type="button" data-action="new-project">New project</button></div></div>
+      <div class="head-actions"><button class="button" type="button" data-action="build-with-ai">Build with AI</button><button class="button primary" type="button" data-action="new-project">New project</button></div></div>
     ${collapsible("summary", "Summary", `<div class="gauges">${overviewGauges(ready, resources)}</div>`)}
     ${pinnedResourcesPanel()}
     <div id="notice" class="notice" role="status"></div>
@@ -815,6 +815,7 @@ async function handleCrud(action, projectId, name, dataset) {
     return true;
   }
   if (action === "new-project") { await openNewProject(); return true; }
+  if (action === "build-with-ai") { openBuildWithAi(); return true; }
   if (action === "config-regenerate" || action === "config-verify") {
     await runConfig(projectId, action === "config-regenerate" ? "regenerate" : "verify");
     return true;
@@ -888,6 +889,18 @@ async function openNewProject() {
 }
 
 document.querySelector("#new-project-nav").addEventListener("click", () => openNewProject());
+
+// Asks which AI chat to open. Each link carries the TDK starter prompt (inspect.js), so nothing about the local machine is sent.
+function openBuildWithAi() {
+  const links = TDK_INSPECT.providerLinks(TDK_INSPECT.buildPrompt()).map((link) => `<a class="ai-btn" href="${esc(link.href)}" target="_blank" rel="noreferrer noopener" style="--ai: ${link.color}" title="Open ${esc(link.label)} with the TDK starter prompt"><svg viewBox="0 0 24 24" aria-hidden="true">${link.logo}</svg>${esc(link.label)}</a>`).join("");
+  formDialog.innerHTML = `<div class="form">
+    <div class="modal-head"><h2>Build with AI</h2><button class="button quiet" type="button" data-close>Close</button></div>
+    <div class="form-body"><p class="form-intro">Pick an AI chat. It opens with a prompt that explains TDK's commands and project layout, then asks what you want to build.</p><div class="ai-row">${links}</div></div>
+  </div>`;
+  for (const close of formDialog.querySelectorAll("[data-close]")) close.addEventListener("click", () => formDialog.close());
+  for (const link of formDialog.querySelectorAll(".ai-btn")) link.addEventListener("click", () => formDialog.close());
+  formDialog.showModal();
+}
 
 async function openDiskCleanup() {
   let info;

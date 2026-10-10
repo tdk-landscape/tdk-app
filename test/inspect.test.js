@@ -68,4 +68,28 @@ describe("inspect prompts", () => {
     assert.equal(links.map((link) => link.href.split("?")[0]).join(","), "https://grok.com/,https://claude.ai/new,https://chatgpt.com/");
     for (const link of links) assert.equal(decodeURIComponent(link.href.slice(link.href.indexOf("?q=") + 3)), prompt);
   });
+
+  it("builds the starter prompt with the TDK commands and architecture rules", () => {
+    const prompt = inspect.buildPrompt();
+    for (const command of ["tdk project", "tdk resource", "tdk stack", "tdk up", "tdk down --force", "tdk config regenerate", "tdk networks", "tdk doctor"]) {
+      assert.ok(prompt.includes(command), `missing ${command}`);
+    }
+    assert.match(prompt, /Project > Stack > Resource/);
+    assert.match(prompt, /\.tdk\/project\.json/);
+    assert.match(prompt, /service\.json, which is the source of truth/);
+    assert.match(prompt, /never edit generated output/);
+    assert.match(prompt, /Wait for my OK/);
+  });
+
+  it("keeps the starter prompt short enough to fit in a chat link", () => {
+    const prompt = inspect.buildPrompt();
+    assert.ok(prompt.length < 3500, `prompt is ${prompt.length} characters`);
+    const longest = Math.max(...inspect.providerLinks(prompt).map((link) => link.href.length));
+    assert.ok(longest < 9000, `link is ${longest} characters`);
+  });
+
+  it("contains no user or machine data", () => {
+    const prompt = inspect.buildPrompt();
+    assert.doesNotMatch(prompt, /\/Users\/|\/home\/|@[a-z0-9-]+\.[a-z]{2,}|password|token/i);
+  });
 });
