@@ -762,6 +762,107 @@
       .doctor-item.pass { border-left-color: var(--c-good-a); }
       .gauge { background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow); border-color: transparent; }
       .project-row, .stack, .doctor-box, .config-box, .conflicts { background: var(--gb-bg); backdrop-filter: var(--gb-blur); -webkit-backdrop-filter: var(--gb-blur); border-color: transparent; box-shadow: 0 0 0 .5px var(--gb-edge), var(--gb-shadow); }
+
+      /* ===== Liquid-glass buttons: clear fill, specular rim, top sheen (loaded last) ===== */
+      :root { --lg-fill: rgba(255, 255, 255, .34); --lg-fill-hover: rgba(255, 255, 255, .5); --lg-fill-press: rgba(255, 255, 255, .22);
+        --lg-sheen: linear-gradient(180deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .08) 52%, rgba(255, 255, 255, 0) 53%);
+        --lg-rim: linear-gradient(140deg, rgba(255, 255, 255, .95), rgba(255, 255, 255, .25) 35%, rgba(255, 255, 255, .08) 60%, rgba(255, 255, 255, .55));
+        --lg-shadow: 0 1px 1px rgba(20, 20, 30, .06), 0 4px 14px rgba(20, 20, 30, .1); --lg-inner: inset 0 -1px 1px rgba(20, 20, 30, .06);
+        --lg-blur: blur(24px) saturate(200%) brightness(1.04); }
+      @media (prefers-color-scheme: dark) { :root { --lg-fill: rgba(255, 255, 255, .09); --lg-fill-hover: rgba(255, 255, 255, .15); --lg-fill-press: rgba(255, 255, 255, .05);
+        --lg-sheen: linear-gradient(180deg, rgba(255, 255, 255, .16), rgba(255, 255, 255, .03) 52%, rgba(255, 255, 255, 0) 53%);
+        --lg-rim: linear-gradient(140deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .12) 35%, rgba(255, 255, 255, .04) 60%, rgba(255, 255, 255, .28));
+        --lg-shadow: 0 1px 1px rgba(0, 0, 0, .35), 0 6px 18px rgba(0, 0, 0, .35); --lg-inner: inset 0 -1px 1px rgba(0, 0, 0, .25);
+        --lg-blur: blur(24px) saturate(180%) brightness(1.08); } }
+
+      .button, .native .button {
+        border: 1px solid transparent;
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill), var(--lg-fill)) padding-box, var(--lg-rim) border-box;
+        backdrop-filter: var(--lg-blur); -webkit-backdrop-filter: var(--lg-blur);
+        box-shadow: var(--lg-shadow), var(--lg-inner); color: var(--label); filter: none;
+        transition: transform .14s cubic-bezier(.3, 1.4, .5, 1), background .18s ease, box-shadow .18s ease; }
+      .button:hover:not(:disabled), .native .button:hover:not(:disabled) {
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill-hover), var(--lg-fill-hover)) padding-box, var(--lg-rim) border-box; filter: none; transform: translateY(-.5px); }
+      .button:active:not(:disabled), .native .button:active:not(:disabled) {
+        background: linear-gradient(var(--lg-fill-press), var(--lg-fill-press)) padding-box, var(--lg-rim) border-box;
+        transform: scale(.955); box-shadow: inset 0 1px 4px rgba(0, 0, 0, .18); filter: none; }
+      .button:focus-visible { outline: none; box-shadow: var(--lg-shadow), 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+      /* Tinted glass for the main action */
+      .button.primary, .native .button.primary {
+        color: #fff; text-shadow: 0 1px 1px rgba(0, 40, 120, .25);
+        background: var(--lg-sheen) padding-box, linear-gradient(180deg, color-mix(in srgb, var(--accent) 72%, transparent), color-mix(in srgb, var(--accent) 60%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 30%, transparent), var(--lg-inner); }
+      .button.primary:hover:not(:disabled), .native .button.primary:hover:not(:disabled) {
+        background: var(--lg-sheen) padding-box, linear-gradient(180deg, color-mix(in srgb, var(--accent) 84%, transparent), color-mix(in srgb, var(--accent) 72%, transparent)) padding-box, var(--lg-rim) border-box; }
+      .button.primary:active:not(:disabled), .native .button.primary:active:not(:disabled) {
+        background: linear-gradient(color-mix(in srgb, var(--accent) 66%, transparent), color-mix(in srgb, var(--accent) 66%, transparent)) padding-box, var(--lg-rim) border-box; }
+
+      /* Soft rose glass for Stop */
+      .button.danger, .native .button.danger, .row-actions .button.danger {
+        color: var(--c-text-bad);
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--c-wash-bad), var(--c-wash-bad)) padding-box, var(--lg-rim) border-box; }
+
+      /* Quiet buttons and links stay clear until hovered */
+      .button.quiet, .native .button.quiet { border-color: transparent; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .button.quiet:hover:not(:disabled), .native .button.quiet:hover:not(:disabled) {
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill), var(--lg-fill)) padding-box, var(--lg-rim) border-box; box-shadow: var(--lg-shadow); backdrop-filter: var(--lg-blur); -webkit-backdrop-filter: var(--lg-blur); }
+      .link-btn { border: 1px solid transparent; }
+      .link-btn:hover { background: linear-gradient(color-mix(in srgb, var(--accent) 12%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)) padding-box, var(--lg-rim) border-box; }
+      .icon-btn { border: 1px solid transparent; }
+      .icon-btn:hover { background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill), var(--lg-fill)) padding-box, var(--lg-rim) border-box; box-shadow: var(--lg-shadow); backdrop-filter: var(--lg-blur); -webkit-backdrop-filter: var(--lg-blur); }
+
+      /* Start / Stop / Restart: one glass capsule holding clear segments */
+      .row-actions {
+        border: 1px solid transparent; padding: 2px; gap: 2px; border-radius: 9px;
+        background: var(--lg-sheen) padding-box, linear-gradient(var(--lg-fill), var(--lg-fill)) padding-box, var(--lg-rim) border-box;
+        backdrop-filter: var(--lg-blur); -webkit-backdrop-filter: var(--lg-blur); box-shadow: var(--lg-shadow), var(--lg-inner); }
+      .row-actions .button, .row-actions .button:first-child, .row-actions .button:last-child { border-radius: 6px; border-color: transparent; background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      .row-actions .button:hover:not(:disabled) { background: linear-gradient(var(--lg-fill-hover), var(--lg-fill-hover)); transform: none; }
+      .row-actions .button.primary { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 78%, transparent), color-mix(in srgb, var(--accent) 64%, transparent)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35); }
+      .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 90%, transparent), color-mix(in srgb, var(--accent) 76%, transparent)); }
+      .row-actions .button.danger { background: linear-gradient(var(--c-wash-bad), var(--c-wash-bad)); }
+      .row-actions .button:active:not(:disabled) { transform: scale(.95); }
+
+      /* ===== Cooler accent, deeper see-through glass, tactile press (loaded last) ===== */
+      :root { --accent: #5856d6; --accent-wash: rgba(88, 86, 214, .14); --cool-a: #2fc2d8; --cool-b: #5f5bdc;
+        --lg-fill: rgba(255, 255, 255, .22); --lg-fill-hover: rgba(255, 255, 255, .36); --lg-fill-press: rgba(255, 255, 255, .14);
+        --lg-shadow: 0 1px 2px rgba(20, 20, 40, .1), 0 8px 24px rgba(20, 20, 40, .16), 0 2px 6px rgba(20, 20, 40, .08); }
+      @media (prefers-color-scheme: dark) { :root { --accent: #8a87ff; --accent-wash: rgba(138, 135, 255, .18); --cool-a: #44d4e6; --cool-b: #7471ff;
+        --lg-fill: rgba(255, 255, 255, .06); --lg-fill-hover: rgba(255, 255, 255, .11); --lg-fill-press: rgba(255, 255, 255, .03);
+        --lg-shadow: 0 1px 2px rgba(0, 0, 0, .5), 0 10px 28px rgba(0, 0, 0, .5), 0 2px 8px rgba(0, 0, 0, .35); } }
+
+      .button, .native .button, .row-actions { transition: transform .22s cubic-bezier(.34, 1.56, .64, 1), background .18s ease, box-shadow .18s ease; }
+      .button:hover:not(:disabled), .native .button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--lg-shadow), 0 12px 30px rgba(0, 0, 0, .12), var(--lg-inner); }
+      .button:active:not(:disabled), .native .button:active:not(:disabled) { transform: scale(.93) translateY(1px); transition-duration: .06s; box-shadow: inset 0 2px 6px rgba(0, 0, 0, .28), 0 1px 1px rgba(0, 0, 0, .1); }
+
+      /* Main action: cool teal-to-indigo glass */
+      .button.primary, .native .button.primary {
+        background: var(--lg-sheen) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 74%, transparent), color-mix(in srgb, var(--cool-b) 78%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: 0 6px 20px color-mix(in srgb, var(--cool-b) 34%, transparent), 0 2px 6px color-mix(in srgb, var(--cool-a) 25%, transparent), var(--lg-inner);
+        text-shadow: 0 1px 1px rgba(10, 20, 80, .3); }
+      .button.primary:hover:not(:disabled), .native .button.primary:hover:not(:disabled) {
+        background: var(--lg-sheen) padding-box, linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 88%, transparent), color-mix(in srgb, var(--cool-b) 90%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: 0 10px 28px color-mix(in srgb, var(--cool-b) 42%, transparent), 0 2px 8px color-mix(in srgb, var(--cool-a) 30%, transparent), var(--lg-inner); }
+      .button.primary:active:not(:disabled), .native .button.primary:active:not(:disabled) {
+        background: linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 70%, transparent), color-mix(in srgb, var(--cool-b) 74%, transparent)) padding-box, var(--lg-rim) border-box;
+        box-shadow: inset 0 2px 6px rgba(10, 20, 80, .4); }
+      .row-actions .button.primary { background: linear-gradient(135deg, color-mix(in srgb, var(--cool-a) 80%, transparent), color-mix(in srgb, var(--cool-b) 82%, transparent)); color: #fff; }
+      .row-actions .button.primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--cool-a), var(--cool-b)); }
+      .row-actions .button:active:not(:disabled) { transform: scale(.92); transition-duration: .06s; }
+      .icon-btn[data-action="start"] { color: var(--cool-b); }
+      .icon-btn:active { transform: scale(.86); transition: transform .06s ease; }
+      .ring.none { --ring-a: var(--c-none-a); }
+
+      /* Pins */
+      .pin-glyph { width: 11px; height: 11px; margin-left: 6px; vertical-align: -1px; color: var(--accent); flex: none; }
+      .icon-btn[data-pinned="1"] { color: var(--accent); }
+      .icon-btn[data-pinned="1"] svg path:first-child { fill: currentColor; fill-opacity: .35; }
+      .side-group { padding: 10px 12px 4px; font: 600 11px var(--sans); letter-spacing: .02em; color: var(--tertiary); text-transform: uppercase; }
+      .rail .side-group { display: none; }
+      .project-item { display: flex; align-items: center; }
+      .pinned-list { border-radius: 10px; }
+      .pinned-list .resource-list { border-top: 0; padding-top: 6px; }
     </style>
   </head>
   <body>

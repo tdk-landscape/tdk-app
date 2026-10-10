@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, statfsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, statfsSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 
 const PROJECT_FILE = join(".tdk", "project.json");
 const PORT_FILE = join(".tdk", ".tdk-out", "tilt-port.json");
-const MAX_BODY = 16 * 1024;
+const MAX_BODY = 64 * 1024;
 const MAX_SCAN_DEPTH = 8;
 const MAX_DIRECTORIES_PER_ROOT = 25_000;
 const MAX_DISCOVERED_PROJECTS = 500;
@@ -213,6 +213,50 @@ export function cleanupCandidates(home = homedir()) {
   ];
 }
 
+// ---------- Persistent UI state (pins, hidden projects, collapsed sections, known project roots) ----------
+// The page's origin changes with the random port, so browser storage does not survive a restart; this file does.
+export function defaultStatePath() {
+  if (process.env.TDK_APP_STATE) return process.env.TDK_APP_STATE;
+  return process.platform === "darwin"
+    ? join(homedir(), "Library", "Application Support", "TDK App", "state.json")
+    : join(homedir(), ".config", "tdk-app", "state.json");
+}
+
+const STATE_LIST_LIMIT = 500;
+const cleanList = (value) => (Array.isArray(value) ? [...new Set(value.filter((item) => typeof item === "string" && item.length > 0 && item.length <= 400))].slice(0, STATE_LIST_LIMIT) : []);
+
+export function normalizeState(raw) {
+  const value = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const pins = value.pins && typeof value.pins === "object" && !Array.isArray(value.pins) ? value.pins : {};
+  return {
+    pins: { projects: cleanList(pins.projects), resources: cleanList(pins.resources) },
+    hidden: cleanList(value.hidden),
+    collapsed: cleanList(value.collapsed),
+    knownRoots: cleanList(value.knownRoots),
+  };
+}
+
+export function readAppState(path = defaultStatePath()) {
+  try {
+    return normalizeState(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return normalizeState(null);
+  }
+}
+
+// Write to a temp file and rename so a crash never leaves a half-written state file.
+export function writeAppState(state, path = defaultStatePath()) {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const temp = `${path}.${process.pid}.tmp`;
+    writeFileSync(temp, `${JSON.stringify(normalizeState(state), null, 2)}\n`);
+    renameSync(temp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // CLI-supplied names are passed as argv; a leading "-" would be parsed as a flag.
 const isArgName = (value) => typeof value === "string" && value.length > 0 && value.length <= 256 && !value.startsWith("-") && !value.includes("\0");
 
@@ -300,7 +344,11 @@ const LIFECYCLE_COMMANDS = ["up", "down"];
 export async function probeCli(execute, cwd = process.cwd()) {
   const probe = { root: cwd };
   const base = { minVersion: MIN_CLI_VERSION, installUrl: INSTALL_URL, version: null };
-  const versionResult = await execute(probe, ["--version"], { timeoutMs: 10_000 });
+  // All probes are read-only, so run them together: about 3x faster than one after another.
+  const [versionResult, ...helps] = await Promise.all([
+    execute(probe, ["--version"], { timeoutMs: 10_000 }),
+    ...LIFECYCLE_COMMANDS.map((command) => execute(probe, [command, "--help"], { timeoutMs: 10_000 })),
+  ]);
   if (versionResult.status !== 0) {
     const missing = /ENOENT/.test(versionResult.stderr);
     return {
@@ -313,8 +361,8 @@ export async function probeCli(execute, cwd = process.cwd()) {
     };
   }
   const version = versionResult.stdout.trim().split(/\s+/).pop() || null;
-  for (const command of LIFECYCLE_COMMANDS) {
-    const help = await execute(probe, [command, "--help"], { timeoutMs: 10_000 });
+  for (const [index, command] of LIFECYCLE_COMMANDS.entries()) {
+    const help = helps[index];
     if (help.status !== 0 || !new RegExp(`^Usage: tdk ${command}\\b`, "m").test(help.stdout)) {
       return {
         ...base,
@@ -442,12 +490,13 @@ function findConflicts(snapshots) {
   return [...owners].filter(([, claimants]) => claimants.length > 1).map(([port, claimants]) => ({ port, claimants }));
 }
 
-export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop, prewarm = false }) {
+export function startAppServer({ projects, projectsReady = Promise.resolve(), probe = probeCli, host = "127.0.0.1", port = 0, token = randomBytes(32).toString("hex"), runCommand = runTdk, openPath = openProjectPath, dockerCheck = checkDocker, dockerRestart = restartDockerDesktop, prewarm = false, statePath = null }) {
   if (host !== "127.0.0.1") throw new Error("TDK App can only bind to 127.0.0.1.");
   let capability = null;
   let updating = false;
   let restartingDocker = false;
   const configLogs = [];
+  let appState = statePath ? readAppState(statePath) : normalizeState(null);
   const lastVerify = new Map();
   // Stale-while-revalidate status cache: answers instantly after the first load, refreshes in the background.
   const statusCache = new Map();
@@ -477,7 +526,10 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
     const entry = statusCache.get(project.id);
     if (entry) entry.at = 0;
   };
-  if (prewarm) void Promise.resolve(projectsReady).then(() => { for (const project of projects) void refreshStatus(project); });
+  if (prewarm) {
+    void Promise.resolve(projectsReady).then(() => { for (const project of projects) void refreshStatus(project); });
+    void Promise.resolve().then(() => cliCapability());
+  }
   const doctorCache = new Map();
   const DOCTOR_TTL_MS = 120_000;
   const loadDoctor = (project, force) => {
@@ -537,7 +589,7 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
       if (!url.pathname.startsWith("/api/")) return sendJson(response, 404, { error: "Not found." });
       if (!sameSecret(request.headers["x-tdk-token"]?.toString() ?? "", token)) return sendJson(response, 403, { error: "Invalid session token." });
       if (request.headers.origin && request.headers.origin !== origin) return sendJson(response, 403, { error: "Invalid origin." });
-      if (request.method === "POST" && request.headers.origin !== origin) return sendJson(response, 403, { error: "A same-origin request is required." });
+      if (request.method !== "GET" && request.method !== "HEAD" && request.headers.origin !== origin) return sendJson(response, 403, { error: "A same-origin request is required." });
 
       if (url.pathname === "/api/cli" && request.method === "GET") {
         return sendJson(response, 200, await cliCapability());
@@ -572,7 +624,16 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
       if (url.pathname === "/api/projects" && request.method === "GET") {
         await projectsReady;
         // One broken project must not take the whole dashboard down.
-        const snapshots = await Promise.all(projects.map((project) => getStatus(project)));
+        // ?fast=1 answers at once: projects without a status yet come back as pending and fill in on the next poll.
+        const fast = url.searchParams.get("fast") === "1";
+        const snapshots = await Promise.all(projects.map((project) => {
+          const cached = statusCache.get(project.id)?.snapshot;
+          if (fast && !cached) {
+            void refreshStatus(project);
+            return { project, resources: [], stacks: [], ports: [], tiltRunning: false, pending: true };
+          }
+          return getStatus(project);
+        }));
         const conflicts = findConflicts(snapshots);
         return sendJson(response, 200, {
           projects: snapshots.map((snapshot) => ({
@@ -581,6 +642,7 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
             path: snapshot.project.root,
             tiltRunning: snapshot.tiltRunning,
             ...(snapshot.error ? { error: snapshot.error } : {}),
+            ...(snapshot.pending ? { pending: true } : {}),
             resources: snapshot.resources,
             stacks: snapshot.stacks,
             ports: snapshot.ports.map((port) => ({ name: port.name, port: port.hostPort })),
@@ -704,6 +766,18 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         if (configLogs.length > CONFIG_LOG_LIMIT) configLogs.length = CONFIG_LOG_LIMIT;
         if (body.operation === "verify") lastVerify.set(project.id, { ok: result.ok, at: entry.at, exitCode: entry.exitCode });
         return sendJson(response, 200, { ...result, entry });
+      }
+      if (url.pathname === "/api/state" && request.method === "GET") {
+        const { knownRoots, ...visible } = appState;
+        return sendJson(response, 200, visible);
+      }
+      if (url.pathname === "/api/state" && request.method === "PUT") {
+        const body = await readBody(request);
+        const next = normalizeState({ ...appState, ...body, knownRoots: appState.knownRoots });
+        appState = next;
+        if (statePath) writeAppState(appState, statePath);
+        const { knownRoots, ...visible } = appState;
+        return sendJson(response, 200, visible);
       }
       if (url.pathname === "/api/config/log" && request.method === "GET") {
         const project = projects.find((entry) => entry.id === url.searchParams.get("project"));

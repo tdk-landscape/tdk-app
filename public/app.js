@@ -65,9 +65,10 @@ const ICONS = {
   move: '<path d="M4 10h11M11 5.5 15.5 10 11 14.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   regenerate: '<path d="M4 10a6 6 0 0 1 10.5-4M16 10a6 6 0 0 1-10.5 4M14.5 3v3.5H11M5.5 17v-3.5H9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   verify: '<path d="M10 2.8 16 5v4.6c0 3.6-2.4 6-6 7.6-3.6-1.6-6-4-6-7.6V5z M7.2 10l2 2 3.6-3.8" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"/>',
+  pin: '<path d="M12.5 3.5 16.5 7.5 13.6 9.2 11.2 13.3 6.7 8.8 10.8 6.4z" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/><path d="M8.9 11.1 4 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
   hide: '<path d="M3 10s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z M4 4l12 12" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
 };
-const ACTION_ICONS = { start: "start", stop: "stop", restart: "restart", logs: "logs", "open-project": "folder", "open-terminal": "terminal", "new-project": "plus", "new-resource": "plus", "new-stack": "stack", "move-resource": "move", "config-regenerate": "regenerate", "config-verify": "verify", "hide-project": "hide", "doctor-refresh": "restart" };
+const ACTION_ICONS = { start: "start", stop: "stop", restart: "restart", logs: "logs", "open-project": "folder", "open-terminal": "terminal", "new-project": "plus", "new-resource": "plus", "new-stack": "stack", "move-resource": "move", "config-regenerate": "regenerate", "config-verify": "verify", "hide-project": "hide", "pin-project": "pin", "pin-resource": "pin", "doctor-refresh": "restart" };
 
 // Adds a small SF-Symbol-style glyph in front of each action button label.
 function decorateButtons(root = document) {
@@ -97,12 +98,36 @@ function actionSet(project, scope = "project", name = "", compact = false) {
   return `<div class="${klass}">${actionButton("start", project, scope, name, "Start")}${scope === "project" ? `${actionButton("stop", project, scope, name, "Stop")}${actionButton("restart", project, scope, name, "Restart")}` : ""}</div>`;
 }
 
-const hidden = new Set((() => { try { return JSON.parse(localStorage.getItem("tdk-hidden") || "[]"); } catch { return []; } })());
+// UI state lives in a file via /api/state: the page origin (random port) changes every launch, so browser storage would forget it.
+const hidden = new Set();
+const pinnedProjects = new Set();
+const pinnedResources = new Set();
+let stateLoaded = false;
+let saveTimer = null;
+function saveState() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    void api("/api/state", { method: "PUT", body: JSON.stringify({ hidden: [...hidden], collapsed: [...collapsed], pins: { projects: [...pinnedProjects], resources: [...pinnedResources] } }) }).catch(() => {});
+  }, 200);
+}
+async function loadState() {
+  try {
+    const state = await api("/api/state");
+    for (const id of state.hidden || []) hidden.add(id);
+    for (const id of state.collapsed || []) collapsed.add(id);
+    for (const id of state.pins?.projects || []) pinnedProjects.add(id);
+    for (const key of state.pins?.resources || []) pinnedResources.add(key);
+  } catch {}
+  stateLoaded = true;
+  applySidebarState();
+}
+const PIN_GLYPH = '<svg class="pin-glyph" viewBox="0 0 20 20" aria-label="Pinned"><path d="M12.5 3.5 16.5 7.5 13.6 9.2 11.2 13.3 6.7 8.8 10.8 6.4z" fill="currentColor"/><path d="M8.9 11.1 4 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 let showHidden = false;
-function saveHidden() { try { localStorage.setItem("tdk-hidden", JSON.stringify([...hidden])); } catch {} }
+function saveHidden() { saveState(); }
 
 function filteredProjects() {
-  const base = showHidden ? projects : projects.filter((project) => !hidden.has(project.id));
+  const base = (showHidden ? [...projects] : projects.filter((project) => !hidden.has(project.id)))
+    .sort((left, right) => Number(pinnedProjects.has(right.id)) - Number(pinnedProjects.has(left.id)));
   if (!searchTerm) return base;
   const query = searchTerm.toLowerCase();
   return base.filter((project) => `${project.name} ${project.path}`.toLowerCase().includes(query));
@@ -116,10 +141,33 @@ function renderSidebar() {
     projectList.innerHTML = `<div class="loading">${projects.length ? "No matching projects" : "No projects found"}</div>`;
     return;
   }
-  projectList.innerHTML = visible.map((project) => `
+  const item = (project) => `
     <button class="project-item ${project.id === selectedProjectId ? "active" : ""}" type="button" data-select-project="${esc(project.id)}" title="${esc(project.name)} · ${esc(project.path)}">
-      ${symbolMarkup(project.name)}<span class="project-item-name">${esc(project.name)}</span>
-    </button>`).join("");
+      ${symbolMarkup(project.name)}<span class="project-item-name">${esc(project.name)}</span>${pinnedProjects.has(project.id) ? PIN_GLYPH : ""}
+    </button>`;
+  const pinned = visible.filter((project) => pinnedProjects.has(project.id));
+  const rest = visible.filter((project) => !pinnedProjects.has(project.id));
+  projectList.innerHTML = pinned.length
+    ? `<div class="side-group">Pinned</div>${pinned.map(item).join("")}${rest.length ? `<div class="side-group">All projects</div>${rest.map(item).join("")}` : ""}`
+    : rest.map(item).join("");
+}
+
+function pinnedResourcesPanel() {
+  const rows = [];
+  for (const key of pinnedResources) {
+    const slash = key.indexOf("/");
+    const project = projects.find((entry) => entry.id === key.slice(0, slash));
+    const resource = project?.resources?.find((entry) => entry.name === key.slice(slash + 1));
+    if (!project || !resource) continue;
+    rows.push(`<div class="resource-row pinned-row">
+      <div class="resource-name" title="${esc(resource.name)}">${esc(resource.name)}<span class="resource-type">${esc(project.name)}${resource.type ? ` · ${esc(resource.type)}` : ""}</span></div>
+      ${statusMarkup(resource.status)}
+      ${resource.url ? `<a class="resource-url" href="${esc(resource.url)}" target="_blank" rel="noreferrer">${esc(resource.url)}</a>` : `<span class="resource-url">No endpoint</span>`}
+      <div class="resource-actions">${iconButton("start", `Start ${resource.name}`, { project: project.id, scope: "resource", name: resource.name })}${iconButton("logs", "Recent logs", { project: project.id, name: resource.name })}${iconButton("pin-resource", "Unpin resource", { project: project.id, name: resource.name, pinned: "1" })}</div>
+    </div>`);
+  }
+  if (!rows.length) return "";
+  return collapsible("pinned-resources", "Pinned resources", `<div class="stack open pinned-list"><div class="resource-list">${rows.join("")}</div></div>`, `${rows.length} pinned`);
 }
 
 function overviewGauges(ready, resources) {
@@ -144,10 +192,10 @@ function renderOverview() {
   const rows = visible.map((project) => {
     const conflicts = (project.conflicts || []).length;
     return `<div class="project-row">
-      <button class="project-open" type="button" data-select-project="${esc(project.id)}">${symbolMarkup(project.name)}<span class="row-title"><strong>${esc(project.name)}</strong><small>${esc(project.path)}</small></span></button>
-      ${project.error ? `<span class="status-label"><i class="state-dot error"></i>Unavailable</span>` : statusMarkup(project.tiltRunning ? "running" : "stopped")}
+      <button class="project-open" type="button" data-select-project="${esc(project.id)}">${symbolMarkup(project.name)}<span class="row-title"><strong>${esc(project.name)}${pinnedProjects.has(project.id) ? PIN_GLYPH : ""}</strong><small>${esc(project.path)}</small></span></button>
+      ${project.pending ? `<span class="status-label"><i class="state-dot"></i>Checking…</span>` : project.error ? `<span class="status-label"><i class="state-dot error"></i>Unavailable</span>` : statusMarkup(project.tiltRunning ? "running" : "stopped")}
       ${scoreMarkup(project)}
-      <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` <span class="badge warn" title="${conflicts} configured port conflicts">${conflicts} conflicts</span>` : ""}`}</span>
+      <span class="row-meta resources-count" ${project.error ? `title="${esc(project.error)}"` : ""}>${project.pending ? "" : project.error ? esc(project.error.slice(0, 60)) : `${(project.resources || []).length} resources${conflicts ? ` <span class="badge warn" title="${conflicts} configured port conflicts">${conflicts} conflicts</span>` : ""}`}</span>
       ${actionSet(project, "project", "", true)}
     </div>`;
   }).join("");
@@ -156,6 +204,7 @@ function renderOverview() {
     <div class="page-head"><div><h1>Projects</h1><p>${projects.length} local workspace${projects.length === 1 ? "" : "s"} discovered across your development folders.</p>${hidden.size ? `<div class="hidden-note">${hidden.size} hidden · <button type="button" data-action="toggle-hidden">${showHidden ? "Hide them again" : "Show them"}</button></div>` : ""}</div>
       <div class="head-actions"><button class="button primary" type="button" data-action="new-project">New project</button></div></div>
     ${collapsible("summary", "Summary", `<div class="gauges">${overviewGauges(ready, resources)}</div>`)}
+    ${pinnedResourcesPanel()}
     <div id="notice" class="notice" role="status"></div>
     ${visible.length ? collapsible("projects", "Projects", `<section class="project-table" aria-label="TDK projects">${rows}</section>`, `${visible.length} shown`) : `<div class="empty"><span class="empty-icon">⌕</span><strong>${projects.length ? "No matching projects" : "No TDK projects found"}</strong><p>${projects.length ? "Try another project name or folder path." : "TDK App searches common development folders. Add a location with --scan-root or initialize a project with tdk project."}</p></div>`}
   </div>`;
@@ -183,7 +232,7 @@ function renderDetail(project) {
       <div class="resource-name" title="${esc(resource.name)}">${esc(resource.name)}${resource.type ? `<span class="resource-type">${esc(resource.type)}</span>` : ""}</div>
       ${statusMarkup(resource.status)}
       ${resource.url ? `<a class="resource-url" href="${esc(resource.url)}" target="_blank" rel="noreferrer">${esc(resource.url)}</a>` : `<span class="resource-url">No endpoint</span>`}
-      <div class="resource-actions">${iconButton("start", `Start ${resource.name}`, { project: project.id, scope: "resource", name: resource.name })}${iconButton("move-resource", "Move to another stack", { project: project.id, name: resource.name, stack: resource.stack || "" })}${iconButton("logs", "Recent logs", { project: project.id, name: resource.name })}</div>
+      <div class="resource-actions">${iconButton("start", `Start ${resource.name}`, { project: project.id, scope: "resource", name: resource.name })}${iconButton("move-resource", "Move to another stack", { project: project.id, name: resource.name, stack: resource.stack || "" })}${iconButton("logs", "Recent logs", { project: project.id, name: resource.name })}${iconButton("pin-resource", pinnedResources.has(`${project.id}/${resource.name}`) ? "Unpin resource" : "Pin resource", { project: project.id, name: resource.name, pinned: pinnedResources.has(`${project.id}/${resource.name}`) ? "1" : "0" })}</div>
     </div>`).join("") : `<div class="resource-row"><span class="resource-name">No resources assigned</span></div>`;
     const quickActions = name === "Unassigned" ? "" : `<div class="stack-quick">${iconButton("start", `Start stack ${name}`, { project: project.id, scope: "stack", name })}</div>`;
     return `<section class="stack ${closedStacks.has(`${project.id}/${name}`) ? "" : "open"}" data-stack="${esc(name)}" data-key="${esc(`${project.id}/${name}`)}"><div class="stack-head"><button class="stack-toggle" type="button" aria-expanded="${!closedStacks.has(`${project.id}/${name}`)}">${chevronMarkup()}<span class="stack-name">${esc(name)}</span><span class="stack-count">${items.length} resource${items.length === 1 ? "" : "s"}</span></button>${quickActions}</div><div class="resource-list">${resourcesMarkup}</div></section>`;
@@ -195,20 +244,20 @@ function renderDetail(project) {
     <div id="notice" class="notice" role="status"></div>
     ${project.error ? `<div class="notice show error">Could not read status: ${esc(project.error)}</div>` : ""}
     <div class="detail-head"><div class="detail-title"><button class="back-link" type="button" data-view-overview>← All projects</button><h1>${esc(project.name)}</h1><code class="detail-path">${esc(project.path)}</code></div>
-      <div class="detail-actions">${actionSet(project)}<span class="toolbar-sep"></span>${iconButton("open-project", "Open folder in Finder", { project: project.id })}${iconButton("open-terminal", "Open in Terminal", { project: project.id })}${menuButton([
+      <div class="detail-actions">${actionSet(project)}<span class="toolbar-sep"></span>${iconButton("pin-project", pinnedProjects.has(project.id) ? "Unpin project" : "Pin project", { project: project.id, pinned: pinnedProjects.has(project.id) ? "1" : "0" })}${iconButton("open-project", "Open folder in Finder", { project: project.id })}${iconButton("open-terminal", "Open in Terminal", { project: project.id })}${menuButton([
         { action: "hide-project", label: hidden.has(project.id) ? "Unhide project" : "Hide project", data: { project: project.id } },
       ])}</div></div>
-    <div class="detail-meta">${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span></div>
+    <div class="detail-meta">${project.pending ? `<span class="status-label"><i class="state-dot"></i>Checking status…</span>` : `${statusMarkup(project.tiltRunning ? "running" : "stopped")}<span class="meta-item">${resources.length} resources</span><span class="meta-item">${stacks.length} stacks</span>`}<span hidden></span></div>
     ${ports ? `<div class="ports">${ports}</div>` : ""}${conflictDetails}
     ${doctorSection(project)}
     ${configSection(project)}
-    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="link-btn" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="link-btn" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
+    ${collapsible("stacks", "Stacks & resources", `<div class="stack-list">${project.pending ? `<div class="skel-row"></div><div class="skel-row"></div>` : stackMarkup || `<div class="empty"><span class="empty-icon">T</span><strong>No resources found</strong><p>Initialize this folder with the TDK CLI to add resources.</p></div>`}</div>`, `${resources.length} total <button class="link-btn" type="button" data-action="new-stack" data-project="${esc(project.id)}">New stack</button><button class="link-btn" type="button" data-action="new-resource" data-project="${esc(project.id)}">Add resource</button>`)}
   </div>`;
 }
 
 // Collapsed sections persist across launches (best effort; storage can be unavailable).
-const collapsed = new Set((() => { try { return JSON.parse(localStorage.getItem("tdk-collapsed") || "[]"); } catch { return []; } })());
-function saveCollapsed() { try { localStorage.setItem("tdk-collapsed", JSON.stringify([...collapsed])); } catch {} }
+const collapsed = new Set();
+function saveCollapsed() { saveState(); }
 
 function collapsible(id, title, body, right = "") {
   const shut = collapsed.has(id);
@@ -347,14 +396,21 @@ function applyCliCapability() {
   inner.prepend(banner);
 }
 
+let pendingTimer = null;
+
 async function refreshData() {
   try {
-    cli = await api("/api/cli").catch(() => null);
-    const response = await api("/api/projects");
+    if (!stateLoaded) await loadState();
+    const cliRequest = api("/api/cli").catch(() => null).then((value) => { cli = value; if (projects.length) render(); });
+    const response = await api("/api/projects?fast=1");
+    void cliRequest;
     projects = response.projects || [];
     if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) selectedProjectId = null;
     render();
-    void loadDoctors();
+    // Poll quickly until every status is in, and only then start doctor runs so they don't compete for CPU.
+    clearTimeout(pendingTimer);
+    if (projects.some((project) => project.pending)) pendingTimer = setTimeout(refreshData, 900);
+    else void loadDoctors();
   } catch (error) {
     content.innerHTML = `<div class="content-inner"><div class="empty"><span class="empty-icon">!</span><strong>Couldn’t load projects</strong><p>${esc(error.message)}</p><button class="button" type="button" id="retry">Try again</button></div></div>`;
     document.querySelector("#retry")?.addEventListener("click", refreshData);
@@ -635,6 +691,19 @@ const post = (url, body) => api(url, { method: "POST", body: JSON.stringify(body
 async function handleCrud(action, projectId, name, dataset) {
   const project = projects.find((entry) => entry.id === projectId);
   if (action === "toggle-hidden") { showHidden = !showHidden; render(); return true; }
+  if (action === "pin-project" && projectId) {
+    if (pinnedProjects.has(projectId)) pinnedProjects.delete(projectId); else pinnedProjects.add(projectId);
+    saveState();
+    render();
+    return true;
+  }
+  if (action === "pin-resource" && projectId && name) {
+    const key = `${projectId}/${name}`;
+    if (pinnedResources.has(key)) pinnedResources.delete(key); else pinnedResources.add(key);
+    saveState();
+    render();
+    return true;
+  }
   if (action === "hide-project" && project) {
     if (hidden.has(project.id)) hidden.delete(project.id); else { hidden.add(project.id); selectedProjectId = null; }
     saveHidden();
@@ -810,3 +879,8 @@ content.addEventListener("click", async (event) => {
   }
   await runConfig(project, operation);
 });
+
+// Native app only: a light trackpad haptic when a control is pressed.
+document.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("button:not(:disabled), a, summary")) window.webkit?.messageHandlers?.haptic?.postMessage("tap");
+}, { passive: true });
