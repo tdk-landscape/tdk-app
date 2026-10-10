@@ -5,7 +5,7 @@ import { connect } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { checkDocker, discoverProjects, lowDiskNote, maskPaths, normalizeState, readAppState, writeAppState, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
+import { checkDocker, discoverProjects, lowDiskNote, maskPaths, tiltProgress, normalizeState, readAppState, writeAppState, restartDockerDesktop, probeCli, resolveProjects, runTdk, startAppServer, summarizeDoctor } from "../src/app.js";
 
 const TOKEN = "crash-test-token";
 const servers = [];
@@ -850,6 +850,85 @@ describe("config drift checks and log", () => {
   });
 });
 
+describe("start progress", () => {
+  const ui = (entries) => ({ items: entries.map(([name, updateStatus, runtimeStatus]) => ({ metadata: { name }, status: { updateStatus, runtimeStatus } })) });
+
+  it("estimates progress from Tilt resource states and ignores disabled ones and the Tiltfile", () => {
+    const progress = tiltProgress(ui([
+      ["(Tiltfile)", "ok", "not_applicable"], ["postgres", "ok", "ok"], ["traefik", "ok", "ok"],
+      ["golden-layers-build", "in_progress", "not_applicable"], ["api", "ok", "pending"], ["web", "pending", "pending"], ["disabled", "none", "none"],
+    ]));
+    assert.equal(progress.total, 5);
+    assert.equal(progress.ready, 2);
+    assert.equal(progress.percent, Math.round(((1 + 1 + 0.4 + 0.75 + 0) / 5) * 100));
+    assert.match(progress.step, /Building golden-layers-build/);
+  });
+
+  it("reports 100% when all ready, flags errors, and survives junk", () => {
+    assert.equal(tiltProgress(ui([["a", "ok", "ok"], ["b", "not_applicable", "ok"]])).percent, 100);
+    assert.equal(tiltProgress(ui([["a", "ok", "ok"], ["b", "ok", "ok"]])).step, "All resources ready");
+    const failed = tiltProgress(ui([["a", "error", "pending"], ["b", "ok", "ok"]]));
+    assert.deepEqual(failed.errors, ["a"]);
+    assert.match(failed.step, /Failed: a/);
+    for (const junk of [null, 5, "x", [], {}, { items: "no" }, { items: [null, 1, { metadata: {} }, { metadata: { name: "x" }, status: "bad" }] }]) {
+      const result = tiltProgress(junk);
+      assert.equal(typeof result.percent, "number");
+    }
+  });
+
+  const tiltFake = ({ ownerRoot, items, gate }) => async (project, args, options) => {
+    if (options?.binary === "tilt" && args[1] === "tiltfile") return { status: 0, stdout: JSON.stringify({ items: [{ spec: { path: `${ownerRoot}/.tdk/.tdk-out/Tiltfile` } }] }), stderr: "" };
+    if (options?.binary === "tilt") return { status: 0, stdout: JSON.stringify({ items }), stderr: "" };
+    if (args[0] === "up" && gate) await gate;
+    return okEnvelope({});
+  };
+
+  it("runs a background start as a job, reports progress, and refuses a second start meanwhile", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const items = [{ metadata: { name: "api" }, status: { updateStatus: "in_progress", runtimeStatus: "pending" } }];
+    const { server } = await boot({ runCommand: tiltFake({ ownerRoot: "/projects/a", items, gate }) });
+    const started = await post(server, "/api/actions", { project: "a", operation: "start", background: true });
+    assert.equal(started.status, 202, started.text);
+    assert.equal(started.json.job.state, "running");
+    assert.equal(started.json.job.progress.percent, 40);
+    assert.equal((await post(server, "/api/actions", { project: "a", operation: "start", background: true })).status, 409);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = await raw(server, { path: "/api/jobs" });
+    const job = after.json.jobs.find((entry) => entry.project === "a");
+    assert.equal(job.state, "done");
+    assert(job.elapsedMs >= 0);
+  });
+
+  it("does not attribute another project's Tilt progress", async () => {
+    const items = [{ metadata: { name: "api" }, status: { updateStatus: "in_progress", runtimeStatus: "pending" } }];
+    const { server } = await boot({ runCommand: tiltFake({ ownerRoot: "/projects/b", items }) });
+    const started = await post(server, "/api/actions", { project: "a", operation: "start", background: true });
+    assert.equal(started.json.job.progress, null, "Tilt belongs to project b");
+  });
+
+  it("lists a start the app did not launch as settling", async () => {
+    const items = [{ metadata: { name: "api" }, status: { updateStatus: "ok", runtimeStatus: "pending" } }];
+    const { server } = await boot({ runCommand: tiltFake({ ownerRoot: "/projects/b", items }) });
+    const response = await raw(server, { path: "/api/jobs" });
+    const external = response.json.jobs.find((job) => job.project === "b");
+    assert(external, response.text);
+    assert.equal(external.state, "settling");
+    assert.equal(external.external, true);
+    assert.equal(external.progress.percent, 75);
+  });
+
+  it("a failed background job reports its error", async () => {
+    const { server } = await boot({ runCommand: async (_p, args, options) => (options?.binary === "tilt" ? { status: 1, stdout: "", stderr: "" } : args[0] === "up" ? { status: 1, stdout: "", stderr: "port 8080 in use" } : okEnvelope({})) });
+    await post(server, "/api/actions", { project: "a", operation: "start", background: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const job = (await raw(server, { path: "/api/jobs" })).json.jobs.find((entry) => entry.project === "a");
+    assert.equal(job.state, "failed");
+    assert.match(job.message, /port 8080 in use/);
+  });
+});
+
 describe("fast project list", () => {
   it("answers ?fast=1 at once with pending rows, then fills them in", async () => {
     let release;
@@ -1036,6 +1115,17 @@ describe("runTdk process handling", () => {
     const result = await runTdk(project(), ["-e", "console.log(process.argv[1])", `; touch ${marker}`], { binary: node });
     assert.equal(result.status, 0);
     assert.throws(() => rmSync(marker), /ENOENT/);
+  });
+
+  it("a detached child keeps running after its parent is killed", async () => {
+    const dir = tempDir();
+    const marker = join(dir, "alive");
+    const childCode = `setTimeout(() => require("fs").writeFileSync(${JSON.stringify(marker)}, "yes"), 600)`;
+    const script = `const { runTdk } = await import(${JSON.stringify(new URL("../src/app.js", import.meta.url).href)}); runTdk({ root: ${JSON.stringify(dir)} }, ["-e", ${JSON.stringify(childCode)}], { binary: process.execPath, detached: true }); setTimeout(() => process.exit(0), 100);`;
+    const { spawnSync } = await import("node:child_process");
+    spawnSync(process.execPath, ["--input-type=module", "-e", script]);
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.equal(existsSync(marker), true, "detached command finished after the parent exited");
   });
 
   it("copes with many parallel invocations", async () => {
