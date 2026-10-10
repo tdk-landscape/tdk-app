@@ -727,6 +727,22 @@
       .log-entry.fail .log-exit { color: var(--red); }
       .log-ms { color: var(--tertiary); font-variant-numeric: tabular-nums; }
       .log-entry pre { margin: 0; padding: 8px 10px 10px; font: 12px/1.5 var(--mono); white-space: pre-wrap; color: var(--label); max-height: 240px; overflow: auto; border-top: 1px solid var(--line-soft); }
+      /* "Inspect with" links: the brand colours of the PR review badges, as plain links so they work offline and under the CSP. */
+      .ai-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+      .ai-label { margin-right: 2px; font-size: 12px; color: var(--secondary); }
+      .ai-btn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--ai); color: #fff; font: 600 12px var(--sans); text-decoration: none; white-space: nowrap; transition: filter .12s ease, transform .12s ease; }
+      .ai-btn:hover { filter: brightness(1.12); }
+      .ai-btn:active { transform: scale(.98); }
+      .ai-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .ai-btn svg { width: 13px; height: 13px; flex: 0 0 13px; }
+      #log-ai { display: grid; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); }
+      #log-ai ~ #log-body { max-height: calc(80vh - 120px); }
+      .ai-switch-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; }
+      .ai-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--label); cursor: pointer; }
+      .ai-switch input { margin: 0; width: 14px; height: 14px; accent-color: var(--accent); cursor: pointer; }
+      .ai-hint { font-size: 11px; color: var(--secondary); }
+      .log-entry .ai-row { padding: 8px 10px 10px; border-top: 1px solid var(--line-soft); }
+      .doctor-box > .ai-row { padding-top: 4px; }
 
       /* ===== Chart palette: soft glass tones instead of saturated system colours (loaded last) ===== */
       :root { --c-good-a: #6fb59a; --c-good-b: #a6dcc3; --c-warn-a: #d8a25e; --c-warn-b: #efcb8e; --c-bad-a: #d88a8a; --c-bad-b: #efb0aa; --c-none-a: #b4b4bb; --c-none-b: #d7d7dc;
@@ -901,7 +917,8 @@
       </section>
     </div>
     <dialog class="modal form-modal" id="form-dialog"></dialog>
-    <dialog class="modal" id="logs"><div class="modal-head"><h2 id="log-title">Recent logs</h2><button class="button quiet" id="close-logs" type="button">Close</button></div><pre id="log-body">Loading…</pre></dialog>
+    <dialog class="modal" id="logs"><div class="modal-head"><h2 id="log-title">Recent logs</h2><button class="button quiet" id="close-logs" type="button">Close</button></div><div id="log-ai"></div><pre id="log-body">Loading…</pre></dialog>
+    <script src="/inspect.js" defer></script>
     <script src="/app.js" defer></script>
   </body>
 </html>

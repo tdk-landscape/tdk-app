@@ -89,6 +89,14 @@ function iconButton(action, title, data = {}) {
   return `<button class="icon-btn" type="button" data-action="${esc(action)}" data-iconed="1" ${attrs} title="${esc(title)}" aria-label="${esc(title)}"><svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[ACTION_ICONS[action]] || ""}</svg></button>`;
 }
 
+// "Inspect with" links that open Grok, Claude or Codex with the TDK output already in the prompt (see inspect.js).
+// Renders nothing while AI inspect is off, so the buttons are not shown at all.
+function inspectRow(prompt, className = "") {
+  if (!aiInspect) return "";
+  const links = TDK_INSPECT.providerLinks(prompt).map((link) => `<a class="ai-btn" href="${esc(link.href)}" target="_blank" rel="noreferrer noopener" style="--ai: ${link.color}" title="Open ${esc(link.label)} with this prompt"><svg viewBox="0 0 24 24" aria-hidden="true">${link.logo}</svg>${esc(link.label)}</a>`).join("");
+  return `<div class="ai-row ${className}"><span class="ai-label">Inspect with</span>${links}</div>`;
+}
+
 function menuButton(items) {
   return `<div class="menu-wrap"><button class="icon-btn" type="button" data-menu title="More actions" aria-label="More actions" aria-haspopup="menu"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.5" fill="currentColor"/><circle cx="10" cy="10" r="1.5" fill="currentColor"/><circle cx="15" cy="10" r="1.5" fill="currentColor"/></svg></button><div class="menu" role="menu" hidden>${items.map((item) => item === "-" ? `<hr>` : `<button type="button" role="menuitem" data-action="${esc(item.action)}" data-iconed="1" ${Object.entries(item.data || {}).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ")}><svg viewBox="0 0 20 20" aria-hidden="true">${ICONS[ACTION_ICONS[item.action]] || ""}</svg>${esc(item.label)}</button>`).join("")}</div></div>`;
 }
@@ -102,12 +110,15 @@ function actionSet(project, scope = "project", name = "", compact = false) {
 const hidden = new Set();
 const pinnedProjects = new Set();
 const pinnedResources = new Set();
+// "Inspect with AI" buttons are off until the user switches them on in the Recent logs dialog.
+let aiInspect = false;
+let logView = null; // the logs dialog's current resource and lines
 let stateLoaded = false;
 let saveTimer = null;
 function saveState() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    void api("/api/state", { method: "PUT", body: JSON.stringify({ hidden: [...hidden], collapsed: [...collapsed], pins: { projects: [...pinnedProjects], resources: [...pinnedResources] } }) }).catch(() => {});
+    void api("/api/state", { method: "PUT", body: JSON.stringify({ hidden: [...hidden], collapsed: [...collapsed], pins: { projects: [...pinnedProjects], resources: [...pinnedResources] }, aiInspect }) }).catch(() => {});
   }, 200);
 }
 async function loadState() {
@@ -117,6 +128,7 @@ async function loadState() {
     for (const id of state.collapsed || []) collapsed.add(id);
     for (const id of state.pins?.projects || []) pinnedProjects.add(id);
     for (const key of state.pins?.resources || []) pinnedResources.add(key);
+    aiInspect = state.aiInspect === true;
   } catch {}
   stateLoaded = true;
   applySidebarState();
@@ -361,7 +373,8 @@ function doctorSection(project) {
   if (result.error) return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="notice show error">Doctor could not finish: ${esc(result.error)}</div></div>`, rerun);
   const issues = result.checks.filter((check) => check.status === "fail" || check.status === "warning");
   const list = issues.length ? issues.map((check) => `<div class="doctor-item ${check.status}"><strong>${esc(check.name)}</strong><span>${esc(check.message)}</span>${check.fix ? `<code>${esc(check.fix)}</code>` : ""}</div>`).join("") : `<div class="doctor-item pass"><strong>All ${result.total} checks passed</strong></div>`;
-  return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong>${stackedBar(result)}<div class="legend"><span><i class="pass"></i>${result.passed} passed</span><span><i class="warning"></i>${result.warnings} warnings</span><span><i class="fail"></i>${result.failed} failed</span></div></div></div>${list}</div>`, rerun);
+  const ask = issues.length ? inspectRow(TDK_INSPECT.doctorPrompt({ project: project.name, path: project.path, score: result.score, issues })) : "";
+  return collapsible("doctor", "Doctor", `<div class="doctor-box"><div class="doctor-summary">${scoreMarkup(project, 84)}<div class="doctor-meta"><strong>${result.score ?? "—"} / 100</strong>${stackedBar(result)}<div class="legend"><span><i class="pass"></i>${result.passed} passed</span><span><i class="warning"></i>${result.warnings} warnings</span><span><i class="fail"></i>${result.failed} failed</span></div></div></div>${list}${ask}</div>`, rerun);
 }
 
 const updateState = { running: false, message: "" };
@@ -494,14 +507,20 @@ async function handleAction(button) {
   const crud = await handleCrud(action, project, name, button.dataset);
   if (crud) return;
   if (action === "logs") {
+    const view = { project, name, owner: projects.find((entry) => entry.id === project), lines: [] };
+    logView = view;
     document.querySelector("#log-title").textContent = `Recent logs · ${name}`;
     document.querySelector("#log-body").textContent = "Loading…";
+    renderLogAi();
     document.querySelector("#logs").showModal();
     try {
       const result = await api(`/api/logs?project=${encodeURIComponent(project)}&resource=${encodeURIComponent(name)}`);
-      document.querySelector("#log-body").textContent = (result.lines || []).map((line) => line.text || JSON.stringify(line)).join("\n") || "No recent logs.";
+      if (logView !== view) return;
+      view.lines = (result.lines || []).map((line) => line.text || JSON.stringify(line));
+      document.querySelector("#log-body").textContent = view.lines.join("\n") || "No recent logs.";
+      renderLogAi();
     } catch (error) {
-      document.querySelector("#log-body").textContent = error.message;
+      if (logView === view) document.querySelector("#log-body").textContent = error.message;
     }
     return;
   }
@@ -660,6 +679,24 @@ document.querySelector("#overview-nav").addEventListener("click", () => {
 });
 document.querySelector("#refresh").addEventListener("click", refreshData);
 document.querySelector("#close-logs").addEventListener("click", () => document.querySelector("#logs").close());
+
+// The switch lives at the top of the logs dialog. Turning it on or off applies to every panel.
+function renderLogAi() {
+  const view = logView;
+  const prompt = aiInspect && view?.lines.length ? TDK_INSPECT.logsPrompt({ project: view.owner?.name || view.project, path: view.owner?.path || "", resource: view.name, lines: view.lines }) : "";
+  document.querySelector("#log-ai").innerHTML = `<div class="ai-switch-row"><label class="ai-switch"><input type="checkbox" id="ai-inspect-toggle" ${aiInspect ? "checked" : ""}><span>Inspect with AI</span></label><span class="ai-hint">${aiInspect ? "Links open your AI chat with this output pasted in. Nothing is sent until you click one." : "Off. Logs are not sent to any AI service, and the Inspect buttons are hidden."}</span></div>${prompt ? inspectRow(prompt) : ""}`;
+}
+
+function setAiInspect(on) {
+  aiInspect = on;
+  saveState();
+  renderLogAi();
+  render();
+}
+
+document.querySelector("#log-ai").addEventListener("change", (event) => {
+  if (event.target.id === "ai-inspect-toggle") setAiInspect(event.target.checked);
+});
 refreshData();
 setInterval(refreshData, 7000);
 setTimeout(pollJobs, 1200);
@@ -930,7 +967,7 @@ function configSection(project) {
   const when = status?.at ? new Date(status.at).toLocaleString() : "";
   const right = `<button class="link-btn" type="button" data-config="verify" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>${busy && state?.running === "verify" ? "Checking…" : "Check now"}</button><button class="link-btn" type="button" data-config="migrate" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>Migrate schema</button><button class="link-btn" type="button" data-config="regenerate" data-project="${esc(project.id)}" ${busy ? "disabled" : ""}>Regenerate</button>`;
   const log = entries.length
-    ? entries.slice(0, 20).map((entry) => `<details class="log-entry ${entry.ok ? "ok" : "fail"}"><summary><span class="log-when">${esc(new Date(entry.at).toLocaleString())}</span><span class="log-action">${esc(entry.action)}</span><span class="log-exit">exit ${entry.exitCode ?? "—"}</span><span class="log-ms">${(entry.durationMs / 1000).toFixed(1)}s</span></summary><pre>${esc(entry.output || "(no output)")}</pre></details>`).join("")
+    ? entries.slice(0, 20).map((entry) => `<details class="log-entry ${entry.ok ? "ok" : "fail"}"><summary><span class="log-when">${esc(new Date(entry.at).toLocaleString())}</span><span class="log-action">${esc(entry.action)}</span><span class="log-exit">exit ${entry.exitCode ?? "—"}</span><span class="log-ms">${(entry.durationMs / 1000).toFixed(1)}s</span></summary><pre>${esc(entry.output || "(no output)")}</pre>${entry.ok ? "" : inspectRow(TDK_INSPECT.runPrompt({ project: project.name, path: project.path, action: entry.action, exitCode: entry.exitCode, output: entry.output }))}</details>`).join("")
     : `<div class="log-empty">No config runs yet. ${state?.error ? esc(state.error) : "Run a check to see its output here."}</div>`;
   const body = `<div class="config-box"><div class="config-summary">${driftBadge(status)}<span class="config-when">${status ? `Last checked ${esc(when)}` : busy ? "Checking…" : ""}</span></div>${state?.error && entries.length ? `<div class="notice show error">${esc(state.error)}</div>` : ""}<div class="log-title">Run log</div><div class="log-list">${log}</div></div>`;
   return collapsible("config", "Config & drift", body, right);

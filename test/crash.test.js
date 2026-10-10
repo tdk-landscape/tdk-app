@@ -957,7 +957,18 @@ describe("persistent UI state (pins, hidden, collapsed)", () => {
     const { server } = await boot({ statePath: join(tempDir(), "state.json") });
     const response = await raw(server, { path: "/api/state" });
     assert.equal(response.status, 200);
-    assert.deepEqual(response.json, { pins: { projects: [], resources: [] }, hidden: [], collapsed: [] });
+    assert.deepEqual(response.json, { pins: { projects: [], resources: [] }, hidden: [], collapsed: [], aiInspect: false });
+  });
+
+  it("keeps AI inspect off unless it is explicitly saved as true", async () => {
+    const path = join(tempDir(), "state.json");
+    const { server } = await boot({ statePath: path });
+    assert.equal((await statePut(server, { aiInspect: "yes" })).json.aiInspect, false);
+    assert.equal((await statePut(server, { aiInspect: 1 })).json.aiInspect, false);
+    assert.equal((await statePut(server, { aiInspect: true })).json.aiInspect, true);
+    const second = await boot({ statePath: path });
+    assert.equal((await raw(second.server, { path: "/api/state" })).json.aiInspect, true);
+    assert.equal((await statePut(second.server, { aiInspect: false })).json.aiInspect, false);
   });
 
   it("saves pins to disk and a new server reads them back", async () => {

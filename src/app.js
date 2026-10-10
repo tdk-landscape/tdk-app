@@ -16,7 +16,10 @@ const SCAN_SKIP_NAMES = new Set([
   ".cache", ".npm", ".bun", ".venv", "venv", ".tox", "Pods", "DerivedData",
 ]);
 const HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-const CLIENT_SCRIPT = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+const CLIENT_SCRIPTS = new Map([
+  ["/app.js", readFileSync(new URL("../public/app.js", import.meta.url), "utf8")],
+  ["/inspect.js", readFileSync(new URL("../public/inspect.js", import.meta.url), "utf8")],
+]);
 
 export function discoverProjectRoot(start = process.cwd()) {
   let directory = resolve(start);
@@ -233,6 +236,8 @@ export function normalizeState(raw) {
     hidden: cleanList(value.hidden),
     collapsed: cleanList(value.collapsed),
     knownRoots: cleanList(value.knownRoots),
+    // Off unless the user turned it on: logs and doctor output are only offered to an AI service after an explicit opt-in.
+    aiInspect: value.aiInspect === true,
   };
 }
 
@@ -664,13 +669,13 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         });
         return response.end(HTML.replace("__TDK_CENTER_TOKEN__", token).replaceAll("tdk center", "tdk-app"));
       }
-      if (url.pathname === "/app.js" && request.method === "GET") {
+      if (CLIENT_SCRIPTS.has(url.pathname) && request.method === "GET") {
         response.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
-        return response.end(CLIENT_SCRIPT);
+        return response.end(CLIENT_SCRIPTS.get(url.pathname));
       }
       if (!url.pathname.startsWith("/api/")) return sendJson(response, 404, { error: "Not found." });
       if (!sameSecret(request.headers["x-tdk-token"]?.toString() ?? "", token)) return sendJson(response, 403, { error: "Invalid session token." });
