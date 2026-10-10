@@ -16,7 +16,10 @@ const SCAN_SKIP_NAMES = new Set([
   ".cache", ".npm", ".bun", ".venv", "venv", ".tox", "Pods", "DerivedData",
 ]);
 const HTML = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
-const CLIENT_SCRIPT = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+const CLIENT_SCRIPTS = new Map([
+  ["/app.js", readFileSync(new URL("../public/app.js", import.meta.url), "utf8")],
+  ["/inspect.js", readFileSync(new URL("../public/inspect.js", import.meta.url), "utf8")],
+]);
 
 export function discoverProjectRoot(start = process.cwd()) {
   let directory = resolve(start);
@@ -233,6 +236,8 @@ export function normalizeState(raw) {
     hidden: cleanList(value.hidden),
     collapsed: cleanList(value.collapsed),
     knownRoots: cleanList(value.knownRoots),
+    // Off unless the user turned it on: logs and doctor output are only offered to an AI service after an explicit opt-in.
+    aiInspect: value.aiInspect === true,
   };
 }
 
@@ -278,7 +283,49 @@ function readMachine(result) {
   return envelope.data;
 }
 
-export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", timeoutMs = 30_000 } = {}) {
+export function savedTiltPort(root) {
+  try {
+    const value = JSON.parse(readFileSync(join(root, PORT_FILE), "utf8"));
+    if (Number.isInteger(value.port) && value.port > 0 && value.port <= 65535) return value.port;
+  } catch {}
+  return null;
+}
+
+// Turns `tilt get uiresources -o json` into a start-up progress estimate.
+// Per resource: built and running = 1, built and starting = 0.75, building = 0.4, waiting = 0. Disabled resources are ignored.
+export function tiltProgress(data) {
+  const items = Array.isArray(data?.items) ? data.items : [];
+  let total = 0;
+  let score = 0;
+  let ready = 0;
+  const building = [];
+  const starting = [];
+  const errors = [];
+  for (const item of items) {
+    const name = item?.metadata?.name;
+    const status = item?.status && typeof item.status === "object" ? item.status : {};
+    const update = typeof status.updateStatus === "string" ? status.updateStatus : "none";
+    const runtime = typeof status.runtimeStatus === "string" ? status.runtimeStatus : "none";
+    if (typeof name !== "string" || name === "(Tiltfile)" || (update === "none" && runtime === "none")) continue;
+    total += 1;
+    const built = update === "ok" || update === "not_applicable";
+    const running = runtime === "ok" || runtime === "not_applicable";
+    if (update === "error" || runtime === "error") { errors.push(name); score += 1; continue; }
+    if (built && running) { score += 1; ready += 1; }
+    else if (built) { score += 0.75; starting.push(name); }
+    else if (update === "in_progress") { score += 0.4; building.push(name); }
+  }
+  const percent = total ? Math.round((score / total) * 100) : 0;
+  const list = (names) => (names.length > 3 ? `${names.slice(0, 3).join(", ")} and ${names.length - 3} more` : names.join(", "));
+  const step = errors.length ? `Failed: ${list(errors)}`
+    : building.length ? `Building ${list(building)}`
+    : starting.length ? `Starting ${list(starting)}`
+    : total && ready === total ? "All resources ready"
+    : total ? "Waiting for resources" : "Waiting for Tilt";
+  return { percent, total, ready, building, starting, errors, step };
+}
+
+export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", timeoutMs = 30_000, detached = false } = {}) {
   return new Promise((resolvePromise) => {
     let savedPort;
     try {
@@ -291,6 +338,8 @@ export function runTdk(project, args, { binary = process.env.TDK_BIN || "tdk", t
       env,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      // Lifecycle commands run in their own process group so quitting the app never stops a start or stop half-way.
+      detached,
     });
     let stdout = "";
     let stderr = "";
@@ -496,6 +545,48 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
   let updating = false;
   let restartingDocker = false;
   const configLogs = [];
+  // Background lifecycle jobs (one per project) and a short cache of Tilt progress.
+  const jobs = new Map();
+  const progressCache = new Map();
+  const JOB_TIMEOUT_MS = 30 * 60_000;
+  // Several projects can default to the same Tilt port, so only trust progress from the Tilt whose Tiltfile is in this project.
+  const tiltOwners = new Map();
+  const tiltOwner = async (port, project) => {
+    const cached = tiltOwners.get(port);
+    if (cached && Date.now() - cached.at < 15_000) return cached.root;
+    let root = null;
+    const result = await runCommand(project, ["get", "tiltfile", "-o", "json", "--port", String(port)], { binary: process.env.TILT_BIN || "tilt", timeoutMs: 8000 });
+    if (result.status === 0) {
+      try {
+        const path = JSON.parse(result.stdout)?.items?.[0]?.spec?.path;
+        if (typeof path === "string") root = path.split(`${sep}.tdk${sep}`)[0];
+      } catch {}
+    }
+    tiltOwners.set(port, { at: Date.now(), root });
+    return root;
+  };
+  const getProgress = async (project) => {
+    const cached = progressCache.get(project.id);
+    if (cached && Date.now() - cached.at < 2000) return cached.value;
+    const port = savedTiltPort(project.root) ?? 10350;
+    if ((await tiltOwner(port, project)) !== project.root) {
+      progressCache.set(project.id, { at: Date.now(), value: null });
+      return null;
+    }
+    const result = await runCommand(project, ["get", "uiresources", "-o", "json", "--port", String(port)], { binary: process.env.TILT_BIN || "tilt", timeoutMs: 8000 });
+    let value = null;
+    if (result.status === 0) { try { value = tiltProgress(JSON.parse(result.stdout)); } catch {} }
+    progressCache.set(project.id, { at: Date.now(), value });
+    return value;
+  };
+  const publicJob = async (job) => {
+    const project = projects.find((entry) => entry.id === job.project);
+    const active = job.state === "running" || (job.detached && job.state === "done");
+    const progress = project && job.operation !== "stop" && (active || Date.now() - (job.endedAt ?? 0) < 60_000) ? await getProgress(project).catch(() => null) : null;
+    let state = job.state;
+    if (job.state === "done" && job.detached && progress && progress.percent < 100 && !progress.errors.length && Date.now() - job.startedAt < JOB_TIMEOUT_MS) state = "settling";
+    return { id: job.id, project: job.project, operation: job.operation, state, message: job.message, startedAt: job.startedAt, endedAt: job.endedAt, elapsedMs: (job.endedAt ?? Date.now()) - job.startedAt, progress };
+  };
   let appState = statePath ? readAppState(statePath) : normalizeState(null);
   const lastVerify = new Map();
   // Stale-while-revalidate status cache: answers instantly after the first load, refreshes in the background.
@@ -578,13 +669,13 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         });
         return response.end(HTML.replace("__TDK_CENTER_TOKEN__", token).replaceAll("tdk center", "tdk-app"));
       }
-      if (url.pathname === "/app.js" && request.method === "GET") {
+      if (CLIENT_SCRIPTS.has(url.pathname) && request.method === "GET") {
         response.writeHead(200, {
           "content-type": "text/javascript; charset=utf-8",
           "cache-control": "no-store",
           "x-content-type-options": "nosniff",
         });
-        return response.end(CLIENT_SCRIPT);
+        return response.end(CLIENT_SCRIPTS.get(url.pathname));
       }
       if (!url.pathname.startsWith("/api/")) return sendJson(response, 404, { error: "Not found." });
       if (!sameSecret(request.headers["x-tdk-token"]?.toString() ?? "", token)) return sendJson(response, 403, { error: "Invalid session token." });
@@ -679,14 +770,49 @@ export function startAppServer({ projects, projectsReady = Promise.resolve(), pr
         const up = ["up", "--json"];
         if (hasStack) up.push(body.stack);
         if (body.resources?.length) up.push("--only", ...body.resources);
-        if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000 }));
-        let result;
-        try {
-          result = body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs: 180_000 }));
-        } finally {
-          invalidateStatus(project);
+        const lifecycle = async (timeoutMs) => {
+          try {
+            if (body.operation !== "start") readMachine(await runCommand(project, ["down", "--json", "--force"], { timeoutMs: 180_000, detached: true }));
+            return body.operation === "stop" ? { operation: "stop" } : readMachine(await runCommand(project, up, { timeoutMs, detached: true }));
+          } finally {
+            invalidateStatus(project);
+          }
+        };
+        if (body.background === true) {
+          // Answer at once; the page polls /api/jobs for progress. Starts can take many minutes the first time images build.
+          const running = jobs.get(project.id);
+          if (running && running.state === "running") return sendJson(response, 409, { error: "An action is already running for this project.", job: await publicJob(running) });
+          const job = { id: randomBytes(6).toString("hex"), project: project.id, operation: body.operation, state: "running", startedAt: Date.now(), endedAt: null, message: "", detached: false };
+          jobs.set(project.id, job);
+          progressCache.delete(project.id);
+          void lifecycle(JOB_TIMEOUT_MS).then((result) => {
+            job.detached = Boolean(result?.startedDetached);
+            job.state = "done";
+            job.message = body.operation === "stop" ? "Stopped." : result?.startedDetached ? "Startup launched; resources are still settling." : "Started.";
+          }).catch((error) => {
+            job.state = "failed";
+            job.message = error instanceof Error ? error.message : String(error);
+          }).finally(() => { job.endedAt = Date.now(); });
+          return sendJson(response, 202, { job: await publicJob(job) });
         }
+        const result = await lifecycle(180_000);
         return sendJson(response, 200, { data: result, message: result.startedDetached ? "Startup launched; TDK will report readiness as it settles." : "TDK lifecycle operation completed." });
+      }
+      if (url.pathname === "/api/jobs" && request.method === "GET") {
+        const recent = [...jobs.values()].filter((job) => job.state === "running" || job.detached || Date.now() - (job.endedAt ?? 0) < 120_000);
+        const listed = await Promise.all(recent.map(publicJob));
+        // Also report starts the app did not launch (for example from a terminal, or before a restart of the app).
+        for (const project of projects) {
+          if (jobs.get(project.id)?.state === "running") continue;
+          const port = savedTiltPort(project.root) ?? 10350;
+          if ((await tiltOwner(port, project).catch(() => null)) !== project.root) continue;
+          if (listed.some((job) => job.project === project.id)) continue;
+          const progress = await getProgress(project).catch(() => null);
+          if (progress && (progress.percent < 100 || progress.errors.length)) {
+            listed.push({ id: null, project: project.id, operation: "start", state: progress.errors.length ? "failed" : "settling", message: progress.errors.length ? progress.step : "", startedAt: null, endedAt: null, elapsedMs: null, progress, external: true });
+          }
+        }
+        return sendJson(response, 200, { jobs: listed });
       }
       if (url.pathname === "/api/disk" && request.method === "GET") {
         const gb = freeGb();

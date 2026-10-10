@@ -156,10 +156,16 @@ describe("TDK App local server", () => {
     const started = await serverFor({ projects, runCommand });
     const pageResponse = await fetch(started.url);
     assert.equal(pageResponse.status, 200);
-    assert.match(await pageResponse.text(), /<script src="\/app\.js" defer><\/script>/);
+    const pageText = await pageResponse.text();
+    assert.match(pageText, /<script src="\/app\.js" defer><\/script>/);
+    assert.match(pageText, /<script src="\/inspect\.js" defer><\/script>/);
     const scriptResponse = await fetch(new URL("/app.js", started.url));
     assert.equal(scriptResponse.status, 200);
     assert.match(await scriptResponse.text(), /function refreshData/);
+    const inspectResponse = await fetch(new URL("/inspect.js", started.url));
+    assert.equal(inspectResponse.status, 200);
+    assert.match(inspectResponse.headers.get("content-type"), /text\/javascript/);
+    assert.match(await inspectResponse.text(), /const TDK_INSPECT/);
     const response = await fetch(new URL("/api/projects", started.url), {
       headers: { "x-tdk-token": started.token },
     });
